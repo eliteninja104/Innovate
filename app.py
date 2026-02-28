@@ -734,8 +734,10 @@ def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal):
     fig_eos = px.bar(eos_by_date, x="eos_date", y="count", color="device_type",
                      color_discrete_map=DEVICE_TYPE_COLORS,
                      labels={"eos_date": "End-of-Sale Date", "count": "Devices"})
-    fig_eos.add_vline(x=today, line_dash="dash", line_color="red",
-                      annotation_text="Today", annotation_position="top right")
+    today_str = today.strftime("%Y-%m-%d")
+    fig_eos.add_vline(x=today_str, line_dash="dash", line_color="red")
+    fig_eos.add_annotation(x=today_str, y=1, yref="paper", text="Today",
+                           showarrow=False, font=dict(color="red"))
     fig_eos.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350,
                           barmode="stack")
 
@@ -745,8 +747,9 @@ def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal):
     fig_eol = px.bar(eol_by_date, x="eol_date", y="count", color="device_type",
                      color_discrete_map=DEVICE_TYPE_COLORS,
                      labels={"eol_date": "End-of-Life Date", "count": "Devices"})
-    fig_eol.add_vline(x=today, line_dash="dash", line_color="red",
-                      annotation_text="Today", annotation_position="top right")
+    fig_eol.add_vline(x=today_str, line_dash="dash", line_color="red")
+    fig_eol.add_annotation(x=today_str, y=1, yref="paper", text="Today",
+                           showarrow=False, font=dict(color="red"))
     fig_eol.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350,
                           barmode="stack")
 
@@ -982,8 +985,10 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
     eol_cost["cumulative_cost"] = eol_cost["total_refresh_cost"].cumsum()
     fig_cum = px.area(eol_cost, x="eol_date", y="cumulative_cost",
                       labels={"eol_date": "End-of-Life Date", "cumulative_cost": "Cumulative Cost ($)"})
-    fig_cum.add_vline(x=pd.Timestamp.now(), line_dash="dash", line_color="red",
-                      annotation_text="Today")
+    today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+    fig_cum.add_vline(x=today_str, line_dash="dash", line_color="red")
+    fig_cum.add_annotation(x=today_str, y=1, yref="paper", text="Today",
+                           showarrow=False, font=dict(color="red"))
     fig_cum.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350)
 
     return fig_cost_lc, fig_cost_dt, fig_scatter, fig_cost_aff, fig_cum
