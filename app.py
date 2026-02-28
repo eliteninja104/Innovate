@@ -292,13 +292,13 @@ def timeline_page():
         dbc.Row([
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.H6("End-of-Sale Timeline", className="text-muted"),
-                dcc.Graph(id="eos-timeline"),
+                dcc.Graph(id="eos-timeline", config={"displayModeBar": False}),
             ]), className="shadow-sm"), md=12),
         ], className="mb-4"),
         dbc.Row([
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.H6("End-of-Life Timeline", className="text-muted"),
-                dcc.Graph(id="eol-timeline"),
+                dcc.Graph(id="eol-timeline", config={"displayModeBar": False}),
             ]), className="shadow-sm"), md=12),
         ], className="mb-4"),
         dbc.Row([
@@ -788,31 +788,79 @@ def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal):
     eos_by_date = eos_df.groupby([pd.Grouper(key="eos_date", freq="QE"), "device_type"]).size().reset_index(name="count")
     fig_eos = px.bar(eos_by_date, x="eos_date", y="count", color="device_type",
                      color_discrete_map=DEVICE_TYPE_COLORS,
-                     labels={"eos_date": "End-of-Sale Date", "count": "Devices"})
+                     labels={
+                         "eos_date": "End-of-Sale Date",
+                         "count": "Devices",
+                         "device_type": "Device Type",
+                     })
     fig_eos.update_traces(
         hovertemplate="<b>%{fullData.name}</b><br>Quarter: %{x|%b %Y}<br>Devices: %{y:,}<extra></extra>"
     )
     today_str = today.strftime("%Y-%m-%d")
     fig_eos.add_vline(x=today_str, line_dash="dash", line_color="red")
-    fig_eos.add_annotation(x=today_str, y=1, yref="paper", text="Today",
-                           showarrow=False, font=dict(color="red"))
-    fig_eos.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350,
-                          barmode="stack")
+    fig_eos.add_annotation(
+        x=today_str,
+        y=0.98,
+        yref="paper",
+        text="Today",
+        showarrow=False,
+        xanchor="left",
+        xshift=12,
+        yshift=0,
+        font=dict(color="red"),
+    )
+    fig_eos.update_layout(
+        margin=dict(t=44, b=72, l=16, r=16),
+        height=350,
+        barmode="stack",
+        legend=dict(
+            title_text="Device Type",
+            orientation="h",
+            yanchor="top",
+            y=-0.22,
+            xanchor="left",
+            x=0,
+        ),
+    )
 
     # EoL timeline
     eol_df = df[df["eol_date"].notna()].copy()
     eol_by_date = eol_df.groupby([pd.Grouper(key="eol_date", freq="QE"), "device_type"]).size().reset_index(name="count")
     fig_eol = px.bar(eol_by_date, x="eol_date", y="count", color="device_type",
                      color_discrete_map=DEVICE_TYPE_COLORS,
-                     labels={"eol_date": "End-of-Life Date", "count": "Devices"})
+                     labels={
+                         "eol_date": "End-of-Life Date",
+                         "count": "Devices",
+                         "device_type": "Device Type",
+                     })
     fig_eol.update_traces(
         hovertemplate="<b>%{fullData.name}</b><br>Quarter: %{x|%b %Y}<br>Devices: %{y:,}<extra></extra>"
     )
     fig_eol.add_vline(x=today_str, line_dash="dash", line_color="red")
-    fig_eol.add_annotation(x=today_str, y=1, yref="paper", text="Today",
-                           showarrow=False, font=dict(color="red"))
-    fig_eol.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350,
-                          barmode="stack")
+    fig_eol.add_annotation(
+        x=today_str,
+        y=0.98,
+        yref="paper",
+        text="Today",
+        showarrow=False,
+        xanchor="left",
+        xshift=12,
+        yshift=0,
+        font=dict(color="red"),
+    )
+    fig_eol.update_layout(
+        margin=dict(t=44, b=72, l=16, r=16),
+        height=350,
+        barmode="stack",
+        legend=dict(
+            title_text="Device Type",
+            orientation="h",
+            yanchor="top",
+            y=-0.22,
+            xanchor="left",
+            x=0,
+        ),
+    )
 
     # Overdue devices table
     overdue = df[(df["lifecycle_status"] == "Past EoL")].copy()
@@ -1018,7 +1066,10 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
     ).reset_index()
     fig_cost_dt = px.bar(cost_dt, x="device_type", y="avg_cost",
                          color="device_type", color_discrete_map=DEVICE_TYPE_COLORS,
-                         labels={"avg_cost": "Avg Cost per Device ($)", "device_type": ""})
+                         labels={
+                             "avg_cost": "Avg Cost per Device ($)",
+                             "device_type": "Device Type",
+                         })
     fig_cost_dt.update_traces(
         hovertemplate="<b>%{x}</b><br>Avg Cost: $%{y:,.0f}<extra></extra>"
     )
@@ -1065,9 +1116,18 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
     )
     today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
     fig_cum.add_vline(x=today_str, line_dash="dash", line_color="red")
-    fig_cum.add_annotation(x=today_str, y=1, yref="paper", text="Today",
-                           showarrow=False, font=dict(color="red"))
-    fig_cum.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350)
+    fig_cum.add_annotation(
+        x=today_str,
+        y=0.98,
+        yref="paper",
+        text="Today",
+        showarrow=False,
+        xanchor="left",
+        xshift=12,
+        yshift=0,
+        font=dict(color="red"),
+    )
+    fig_cum.update_layout(margin=dict(t=44, b=10, l=16, r=16), height=350)
 
     return fig_cost_lc, fig_cost_dt, fig_scatter, fig_cost_aff, fig_cum
 
