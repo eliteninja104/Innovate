@@ -1,0 +1,25 @@
+{
+  "run_timestamp": "2026-02-28T13:57:05.168053",
+  "source_file": "C:\\Users\\jayde\\OneDrive\\Desktop\\Innovate\\UAInnovateDataset-SoCo.xlsx",
+  "total_devices": 22744,
+  "by_source": {
+    "CatCtr": 12201,
+    "NA": 10125,
+    "PrimeAP": 411,
+    "PrimeWLC": 7
+  },
+  "by_device_type": {
+    "Switch": 10963,
+    "Access Point": 7604,
+    "Router": 3998,
+    "Voice Gateway": 92,
+    "Wireless LAN Controller": 87
+  },
+  "by_lifecycle_status": {
+    "Unknown": 15334,
+    "Past EoS": 6263,
+    "Past EoL": 1147
+  },
+  "geocoded_count": 22725,
+  "total_refresh_cost": 48521103.3548
+}

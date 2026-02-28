@@ -1,0 +1,1246 @@
+"""
+Southern Company Network Equipment Lifecycle Dashboard
+======================================================
+Interactive web dashboard for network equipment lifecycle management.
+Run with: python app.py
+"""
+
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from dash import Dash, html, dcc, callback_context, dash_table, Input, Output, State, ALL, MATCH
+import dash_bootstrap_components as dbc
+from sklearn.cluster import DBSCAN
+
+from etl_pipeline import run_pipeline, save_exceptions, load_exceptions, OUTPUT_DIR, DATA_FILE
+
+# ---------------------------------------------------------------------------
+# Initialize
+# ---------------------------------------------------------------------------
+app = Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.FLATLY, dbc.icons.FONT_AWESOME],
+    suppress_callback_exceptions=True,
+    title="Southern Co. Network Lifecycle Dashboard",
+)
+
+# ---------------------------------------------------------------------------
+# Color schemes
+# ---------------------------------------------------------------------------
+RISK_COLORS = {
+    "Critical": "#dc3545",
+    "High": "#fd7e14",
+    "Medium": "#ffc107",
+    "Low": "#28a745",
+}
+
+LIFECYCLE_COLORS = {
+    "Past EoL": "#dc3545",
+    "Past EoS": "#fd7e14",
+    "EoS within 1yr": "#ffc107",
+    "Current": "#28a745",
+    "Unknown": "#6c757d",
+}
+
+DEVICE_TYPE_COLORS = {
+    "Switch": "#0d6efd",
+    "Router": "#6610f2",
+    "Access Point": "#20c997",
+    "Wireless LAN Controller": "#0dcaf0",
+    "Voice Gateway": "#d63384",
+}
+
+# ---------------------------------------------------------------------------
+# Data Loading
+# ---------------------------------------------------------------------------
+def load_data():
+    """Load processed data, running pipeline if needed."""
+    csv_path = OUTPUT_DIR / "unified_devices.csv"
+    if not csv_path.exists():
+        run_pipeline()
+    df = pd.read_csv(csv_path, low_memory=False)
+    for col in ["eos_date", "eol_date"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+    # Ensure risk_tier is categorical with order
+    df["risk_tier"] = pd.Categorical(df["risk_tier"], categories=["Low", "Medium", "High", "Critical"], ordered=True)
+    return df
+
+
+DF = load_data()
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+def haversine(lat1, lon1, lat2, lon2):
+    """Compute haversine distance in miles between two points."""
+    R = 3958.8  # Earth radius in miles
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+
+def get_filter_options(df):
+    """Extract unique filter values."""
+    return {
+        "states": sorted(df["state"].dropna().unique().tolist()),
+        "affiliates": sorted(df["affiliate"].dropna().unique().tolist()),
+        "device_types": sorted(df["device_type"].dropna().unique().tolist()),
+        "lifecycle_statuses": ["Past EoL", "Past EoS", "EoS within 1yr", "Current", "Unknown"],
+        "risk_tiers": ["Critical", "High", "Medium", "Low"],
+    }
+
+
+FILTER_OPTS = get_filter_options(DF)
+
+
+def apply_filters(df, states, affiliates, device_types, lifecycle_statuses):
+    """Apply dashboard filters."""
+    filtered = df.copy()
+    if states:
+        filtered = filtered[filtered["state"].isin(states)]
+    if affiliates:
+        filtered = filtered[filtered["affiliate"].isin(affiliates)]
+    if device_types:
+        filtered = filtered[filtered["device_type"].isin(device_types)]
+    if lifecycle_statuses:
+        filtered = filtered[filtered["lifecycle_status"].isin(lifecycle_statuses)]
+    return filtered
+
+
+# ---------------------------------------------------------------------------
+# Layout Components
+# ---------------------------------------------------------------------------
+def make_kpi_card(title, value, icon, color="primary"):
+    return dbc.Card(
+        dbc.CardBody([
+            html.Div([
+                html.I(className=f"fas fa-{icon} fa-2x text-{color}", style={"opacity": "0.7"}),
+                html.Div([
+                    html.H3(value, className=f"text-{color} mb-0 fw-bold"),
+                    html.Small(title, className="text-muted"),
+                ], className="text-end"),
+            ], className="d-flex justify-content-between align-items-center"),
+        ]),
+        className="shadow-sm h-100",
+    )
+
+
+def make_sidebar():
+    return html.Div([
+        html.Div([
+            html.H5("Southern Company", className="text-white fw-bold mb-0"),
+            html.Small("Network Lifecycle Dashboard", className="text-light opacity-75"),
+        ], className="p-3 bg-dark"),
+
+        html.Hr(className="my-0"),
+
+        html.Div([
+            html.Label("Navigation", className="fw-bold text-muted small mb-2"),
+            dbc.Nav([
+                dbc.NavLink([html.I(className="fas fa-tachometer-alt me-2"), "Executive Summary"],
+                            href="#", id="nav-overview", active=True, className="nav-link-custom"),
+                dbc.NavLink([html.I(className="fas fa-map-marked-alt me-2"), "Geographic Risk Map"],
+                            href="#", id="nav-map", className="nav-link-custom"),
+                dbc.NavLink([html.I(className="fas fa-calendar-alt me-2"), "EoS / EoL Timeline"],
+                            href="#", id="nav-timeline", className="nav-link-custom"),
+                dbc.NavLink([html.I(className="fas fa-project-diagram me-2"), "Proximity Analysis"],
+                            href="#", id="nav-proximity", className="nav-link-custom"),
+                dbc.NavLink([html.I(className="fas fa-dollar-sign me-2"), "Cost & Risk Analysis"],
+                            href="#", id="nav-cost", className="nav-link-custom"),
+                dbc.NavLink([html.I(className="fas fa-flag me-2"), "Exception Management"],
+                            href="#", id="nav-exceptions", className="nav-link-custom"),
+                dbc.NavLink([html.I(className="fas fa-sort-amount-up me-2"), "Refresh Priorities"],
+                            href="#", id="nav-priorities", className="nav-link-custom"),
+            ], vertical=True, pills=True),
+        ], className="p-3"),
+
+        html.Hr(),
+
+        html.Div([
+            html.Label("Filters", className="fw-bold text-muted small mb-2"),
+
+            html.Label("State", className="small fw-semibold mt-2"),
+            dcc.Dropdown(
+                id="filter-state",
+                options=[{"label": s, "value": s} for s in FILTER_OPTS["states"]],
+                multi=True,
+                placeholder="All States",
+                className="mb-2",
+            ),
+
+            html.Label("Affiliate", className="small fw-semibold"),
+            dcc.Dropdown(
+                id="filter-affiliate",
+                options=[{"label": a, "value": a} for a in FILTER_OPTS["affiliates"]],
+                multi=True,
+                placeholder="All Affiliates",
+                className="mb-2",
+            ),
+
+            html.Label("Device Type", className="small fw-semibold"),
+            dcc.Dropdown(
+                id="filter-device-type",
+                options=[{"label": d, "value": d} for d in FILTER_OPTS["device_types"]],
+                multi=True,
+                placeholder="All Types",
+                className="mb-2",
+            ),
+
+            html.Label("Lifecycle Status", className="small fw-semibold"),
+            dcc.Dropdown(
+                id="filter-lifecycle",
+                options=[{"label": s, "value": s} for s in FILTER_OPTS["lifecycle_statuses"]],
+                multi=True,
+                placeholder="All Statuses",
+                className="mb-2",
+            ),
+
+            dbc.Button([html.I(className="fas fa-sync me-1"), "Refresh Data"],
+                       id="btn-refresh", color="outline-primary", size="sm",
+                       className="w-100 mt-3"),
+        ], className="p-3"),
+    ], id="sidebar", className="bg-light border-end",
+       style={"width": "280px", "minHeight": "100vh", "position": "fixed",
+              "overflowY": "auto", "zIndex": "1000"})
+
+
+# ---------------------------------------------------------------------------
+# Page Views
+# ---------------------------------------------------------------------------
+def overview_page():
+    return html.Div([
+        html.H4("Executive Summary", className="mb-3"),
+        html.Div(id="kpi-row"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Device Distribution by Type", className="text-muted"),
+                dcc.Graph(id="chart-device-types", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=4),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Lifecycle Status Overview", className="text-muted"),
+                dcc.Graph(id="chart-lifecycle", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=4),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Risk Distribution", className="text-muted"),
+                dcc.Graph(id="chart-risk-dist", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=4),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Devices by State", className="text-muted"),
+                dcc.Graph(id="chart-by-state", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=6),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Devices by Affiliate", className="text-muted"),
+                dcc.Graph(id="chart-by-affiliate", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=6),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Top 15 Models by Count", className="text-muted"),
+                dcc.Graph(id="chart-top-models", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=12),
+        ]),
+    ])
+
+
+def map_page():
+    return html.Div([
+        html.H4("Geographic Risk Map", className="mb-3"),
+        html.P("Device risk by location. Bubble size = device count, color = average risk score.",
+               className="text-muted"),
+        dbc.Card(dbc.CardBody([
+            dcc.Graph(id="geo-map", style={"height": "70vh"}),
+        ]), className="shadow-sm mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Risk by State (Choropleth)", className="text-muted"),
+                dcc.Graph(id="state-choropleth", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=6),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Risk Heatmap by County", className="text-muted"),
+                dcc.Graph(id="county-risk-bar", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=6),
+        ]),
+    ])
+
+
+def timeline_page():
+    return html.Div([
+        html.H4("EoS / EoL Timeline", className="mb-3"),
+        html.P("Upcoming lifecycle milestones over time.", className="text-muted"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("End-of-Sale Timeline", className="text-muted"),
+                dcc.Graph(id="eos-timeline"),
+            ]), className="shadow-sm"), md=12),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("End-of-Life Timeline", className="text-muted"),
+                dcc.Graph(id="eol-timeline"),
+            ]), className="shadow-sm"), md=12),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Overdue Devices — Past EoL Still in Production", className="text-muted"),
+                html.Div(id="overdue-table-container"),
+            ]), className="shadow-sm"), md=12),
+        ]),
+    ])
+
+
+def proximity_page():
+    return html.Div([
+        html.H4("Proximity-Based Refresh Planning", className="mb-3"),
+        html.P("Identify sites within a specified radius for coordinated refresh projects.",
+               className="text-muted"),
+        dbc.Row([
+            dbc.Col([
+                html.Label("Cluster Radius (miles)", className="fw-semibold"),
+                dcc.Slider(id="proximity-radius", min=1, max=25, step=1, value=5,
+                           marks={1: "1mi", 5: "5mi", 10: "10mi", 15: "15mi", 25: "25mi"},
+                           tooltip={"placement": "bottom", "always_visible": True}),
+            ], md=6),
+            dbc.Col([
+                html.Label("Min Sites per Cluster", className="fw-semibold"),
+                dcc.Slider(id="proximity-min-sites", min=2, max=10, step=1, value=2,
+                           marks={2: "2", 5: "5", 10: "10"},
+                           tooltip={"placement": "bottom", "always_visible": True}),
+            ], md=6),
+        ], className="mb-4"),
+        dbc.Card(dbc.CardBody([
+            dcc.Graph(id="proximity-map", style={"height": "60vh"}),
+        ]), className="shadow-sm mb-4"),
+        dbc.Card(dbc.CardBody([
+            html.H6("Cluster Details", className="text-muted"),
+            html.Div(id="cluster-details"),
+        ]), className="shadow-sm"),
+    ])
+
+
+def cost_page():
+    return html.Div([
+        html.H4("Cost & Risk Analysis", className="mb-3"),
+        html.P("How lifecycle status correlates with support coverage, security risk, and cost.",
+               className="text-muted"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Total Refresh Cost by Lifecycle Status", className="text-muted"),
+                dcc.Graph(id="cost-by-lifecycle"),
+            ]), className="shadow-sm"), md=6),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Average Cost per Device by Type", className="text-muted"),
+                dcc.Graph(id="cost-by-type"),
+            ]), className="shadow-sm"), md=6),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Risk Score vs Refresh Cost", className="text-muted"),
+                dcc.Graph(id="risk-vs-cost-scatter"),
+            ]), className="shadow-sm"), md=6),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Cost Distribution by Affiliate", className="text-muted"),
+                dcc.Graph(id="cost-by-affiliate"),
+            ]), className="shadow-sm"), md=6),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Cumulative Refresh Investment Required", className="text-muted"),
+                dcc.Graph(id="cumulative-cost"),
+            ]), className="shadow-sm"), md=12),
+        ]),
+    ])
+
+
+def exceptions_page():
+    return html.Div([
+        html.H4("Exception Management", className="mb-3"),
+        html.P("Flag active devices that should be excluded from project scope. "
+               "Flagged devices are persisted and respected in all reports.",
+               className="text-muted"),
+        dbc.Row([
+            dbc.Col([
+                html.Label("Search by Hostname or Serial Number", className="fw-semibold"),
+                dbc.InputGroup([
+                    dbc.Input(id="exception-search", placeholder="Enter hostname or serial..."),
+                    dbc.Button("Search", id="exception-search-btn", color="primary"),
+                ]),
+            ], md=6),
+            dbc.Col([
+                html.Div(id="exception-count-badge", className="mt-4"),
+            ], md=6),
+        ], className="mb-3"),
+        html.Div(id="exception-search-results"),
+        html.Hr(),
+        html.H6("Currently Flagged Exceptions", className="text-muted mt-3"),
+        html.Div(id="exception-list"),
+    ])
+
+
+def priorities_page():
+    return html.Div([
+        html.H4("Refresh Prioritization Recommendations", className="mb-3"),
+        html.P("Sites and models prioritized by risk exposure and cost-efficiency.",
+               className="text-muted"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Top 20 Highest Risk Sites", className="text-muted"),
+                dcc.Graph(id="priority-sites"),
+            ]), className="shadow-sm"), md=6),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Priority Models for Refresh", className="text-muted"),
+                dcc.Graph(id="priority-models"),
+            ]), className="shadow-sm"), md=6),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Recommended Refresh Schedule", className="text-muted"),
+                html.Div(id="refresh-schedule-table"),
+            ]), className="shadow-sm"), md=12),
+        ]),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Main Layout
+# ---------------------------------------------------------------------------
+app.layout = html.Div([
+    dcc.Store(id="current-page", data="overview"),
+    dcc.Store(id="filtered-data-signal", data=0),
+    make_sidebar(),
+    html.Div([
+        html.Div([
+            html.H6("Southern Company — Network Services Lifecycle Analytics",
+                     className="text-muted mb-0"),
+            html.Small(id="filter-summary", className="text-muted"),
+        ], className="d-flex justify-content-between align-items-center p-3 bg-white border-bottom"),
+        html.Div(id="page-content", className="p-4"),
+    ], style={"marginLeft": "280px"}),
+])
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Navigation
+# ---------------------------------------------------------------------------
+NAV_IDS = ["nav-overview", "nav-map", "nav-timeline", "nav-proximity",
+           "nav-cost", "nav-exceptions", "nav-priorities"]
+PAGE_MAP = {
+    "nav-overview": "overview",
+    "nav-map": "map",
+    "nav-timeline": "timeline",
+    "nav-proximity": "proximity",
+    "nav-cost": "cost",
+    "nav-exceptions": "exceptions",
+    "nav-priorities": "priorities",
+}
+
+
+@app.callback(
+    Output("current-page", "data"),
+    [Input(nid, "n_clicks") for nid in NAV_IDS],
+    prevent_initial_call=True,
+)
+def switch_page(*args):
+    ctx = callback_context
+    if not ctx.triggered:
+        return "overview"
+    triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    return PAGE_MAP.get(triggered_id, "overview")
+
+
+@app.callback(
+    [Output(nid, "active") for nid in NAV_IDS],
+    Input("current-page", "data"),
+)
+def update_nav_active(page):
+    return [PAGE_MAP.get(nid) == page for nid in NAV_IDS]
+
+
+@app.callback(
+    Output("page-content", "children"),
+    Input("current-page", "data"),
+)
+def render_page(page):
+    pages = {
+        "overview": overview_page,
+        "map": map_page,
+        "timeline": timeline_page,
+        "proximity": proximity_page,
+        "cost": cost_page,
+        "exceptions": exceptions_page,
+        "priorities": priorities_page,
+    }
+    return pages.get(page, overview_page)()
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Data refresh
+# ---------------------------------------------------------------------------
+@app.callback(
+    Output("filtered-data-signal", "data"),
+    Input("btn-refresh", "n_clicks"),
+    prevent_initial_call=True,
+)
+def refresh_data(n):
+    global DF, FILTER_OPTS
+    run_pipeline()
+    DF = load_data()
+    FILTER_OPTS = get_filter_options(DF)
+    return (n or 0)
+
+
+@app.callback(
+    Output("filter-summary", "children"),
+    [Input("filter-state", "value"),
+     Input("filter-affiliate", "value"),
+     Input("filter-device-type", "value"),
+     Input("filter-lifecycle", "value")],
+)
+def update_filter_summary(states, affiliates, dtypes, lifecycle):
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    parts = [f"{len(df):,} devices"]
+    if states:
+        parts.append(f"{len(states)} state(s)")
+    if affiliates:
+        parts.append(f"{len(affiliates)} affiliate(s)")
+    return " | ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Overview
+# ---------------------------------------------------------------------------
+@app.callback(
+    [Output("kpi-row", "children"),
+     Output("chart-device-types", "figure"),
+     Output("chart-lifecycle", "figure"),
+     Output("chart-risk-dist", "figure"),
+     Output("chart-by-state", "figure"),
+     Output("chart-by-affiliate", "figure"),
+     Output("chart-top-models", "figure")],
+    [Input("current-page", "data"),
+     Input("filter-state", "value"),
+     Input("filter-affiliate", "value"),
+     Input("filter-device-type", "value"),
+     Input("filter-lifecycle", "value"),
+     Input("filtered-data-signal", "data")],
+)
+def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
+    if page != "overview":
+        return [html.Div()] + [go.Figure()] * 6
+
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    # Exclude exceptions
+    df = df[df["exception_flagged"] != True]
+
+    # KPIs
+    total = len(df)
+    past_eol = (df["lifecycle_status"] == "Past EoL").sum()
+    past_eos = (df["lifecycle_status"] == "Past EoS").sum()
+    total_cost = df["total_refresh_cost"].sum()
+    critical = (df["risk_tier"] == "Critical").sum()
+    sites = df["site_code"].nunique()
+
+    kpi_row = dbc.Row([
+        dbc.Col(make_kpi_card("Total Active Devices", f"{total:,}", "server", "primary"), md=2),
+        dbc.Col(make_kpi_card("Past End-of-Life", f"{past_eol:,}", "exclamation-triangle", "danger"), md=2),
+        dbc.Col(make_kpi_card("Past End-of-Sale", f"{past_eos:,}", "clock", "warning"), md=2),
+        dbc.Col(make_kpi_card("Critical Risk", f"{critical:,}", "fire", "danger"), md=2),
+        dbc.Col(make_kpi_card("Est. Refresh Cost", f"${total_cost:,.0f}", "dollar-sign", "info"), md=2),
+        dbc.Col(make_kpi_card("Active Sites", f"{sites:,}", "building", "success"), md=2),
+    ], className="mb-4")
+
+    # Device types pie
+    dt_counts = df["device_type"].value_counts()
+    fig_dt = px.pie(values=dt_counts.values, names=dt_counts.index,
+                    color=dt_counts.index,
+                    color_discrete_map=DEVICE_TYPE_COLORS,
+                    hole=0.4)
+    fig_dt.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300,
+                         legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+
+    # Lifecycle pie
+    lc_counts = df["lifecycle_status"].value_counts()
+    fig_lc = px.pie(values=lc_counts.values, names=lc_counts.index,
+                    color=lc_counts.index,
+                    color_discrete_map=LIFECYCLE_COLORS,
+                    hole=0.4)
+    fig_lc.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300,
+                         legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+
+    # Risk distribution
+    risk_counts = df["risk_tier"].value_counts().reindex(["Low", "Medium", "High", "Critical"], fill_value=0)
+    fig_risk = px.bar(x=risk_counts.index, y=risk_counts.values,
+                      color=risk_counts.index,
+                      color_discrete_map=RISK_COLORS,
+                      labels={"x": "Risk Tier", "y": "Device Count"})
+    fig_risk.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300, showlegend=False)
+
+    # By state
+    state_counts = df.groupby("state").agg(
+        count=("device_id", "count"),
+        avg_risk=("risk_score", "mean")
+    ).sort_values("count", ascending=True).tail(15)
+    fig_state = px.bar(state_counts, x="count", y=state_counts.index, orientation="h",
+                       color="avg_risk", color_continuous_scale="YlOrRd",
+                       labels={"count": "Devices", "y": "State", "avg_risk": "Avg Risk"})
+    fig_state.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400)
+
+    # By affiliate
+    aff_counts = df.groupby("affiliate").agg(
+        count=("device_id", "count"),
+        avg_risk=("risk_score", "mean")
+    ).sort_values("count", ascending=True)
+    fig_aff = px.bar(aff_counts, x="count", y=aff_counts.index, orientation="h",
+                     color="avg_risk", color_continuous_scale="YlOrRd",
+                     labels={"count": "Devices", "y": "Affiliate", "avg_risk": "Avg Risk"})
+    fig_aff.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400)
+
+    # Top models
+    model_counts = df["model"].value_counts().head(15)
+    model_lifecycle = df[df["model"].isin(model_counts.index)].groupby("model")["lifecycle_status"].apply(
+        lambda x: x.mode()[0] if len(x) > 0 else "Unknown"
+    )
+    fig_models = px.bar(x=model_counts.values, y=model_counts.index, orientation="h",
+                        color=[model_lifecycle.get(m, "Unknown") for m in model_counts.index],
+                        color_discrete_map=LIFECYCLE_COLORS,
+                        labels={"x": "Count", "y": "Model", "color": "Lifecycle"})
+    fig_models.update_layout(margin=dict(t=10, b=30, l=10, r=10), height=400,
+                             yaxis=dict(autorange="reversed"))
+
+    return kpi_row, fig_dt, fig_lc, fig_risk, fig_state, fig_aff, fig_models
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Geographic Map
+# ---------------------------------------------------------------------------
+@app.callback(
+    [Output("geo-map", "figure"),
+     Output("state-choropleth", "figure"),
+     Output("county-risk-bar", "figure")],
+    [Input("current-page", "data"),
+     Input("filter-state", "value"),
+     Input("filter-affiliate", "value"),
+     Input("filter-device-type", "value"),
+     Input("filter-lifecycle", "value"),
+     Input("filtered-data-signal", "data")],
+)
+def update_map(page, states, affiliates, dtypes, lifecycle, _signal):
+    if page != "map":
+        return [go.Figure()] * 3
+
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    df = df[df["exception_flagged"] != True]
+    geo = df[df["latitude"].notna() & df["longitude"].notna()].copy()
+
+    # Aggregate by site
+    site_agg = geo.groupby(["site_code", "latitude", "longitude", "site_name", "state", "county"]).agg(
+        device_count=("device_id", "count"),
+        avg_risk=("risk_score", "mean"),
+        past_eol=("lifecycle_status", lambda x: (x == "Past EoL").sum()),
+        past_eos=("lifecycle_status", lambda x: (x == "Past EoS").sum()),
+        total_cost=("total_refresh_cost", "sum"),
+    ).reset_index()
+
+    fig_map = px.scatter_map(
+        site_agg,
+        lat="latitude",
+        lon="longitude",
+        size="device_count",
+        color="avg_risk",
+        color_continuous_scale="YlOrRd",
+        hover_name="site_name",
+        hover_data={
+            "device_count": True,
+            "avg_risk": ":.1f",
+            "past_eol": True,
+            "past_eos": True,
+            "state": True,
+            "county": True,
+            "latitude": False,
+            "longitude": False,
+        },
+        size_max=25,
+        zoom=5,
+        center={"lat": 33.0, "lon": -85.0},
+    )
+    fig_map.update_layout(
+        margin=dict(t=0, b=0, l=0, r=0),
+        map_style="carto-positron",
+    )
+
+    # State choropleth
+    state_risk = df.groupby("state").agg(
+        avg_risk=("risk_score", "mean"),
+        count=("device_id", "count"),
+    ).reset_index()
+    fig_choro = px.choropleth(
+        state_risk, locations="state", locationmode="USA-states",
+        color="avg_risk", color_continuous_scale="YlOrRd",
+        scope="usa",
+        hover_data={"count": True, "avg_risk": ":.1f"},
+        labels={"avg_risk": "Avg Risk Score"},
+    )
+    fig_choro.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400)
+
+    # County risk bar
+    county_risk = df[df["county"].notna()].groupby("county").agg(
+        avg_risk=("risk_score", "mean"),
+        count=("device_id", "count"),
+    ).sort_values("avg_risk", ascending=False).head(20).reset_index()
+    fig_county = px.bar(county_risk, x="avg_risk", y="county", orientation="h",
+                        color="avg_risk", color_continuous_scale="YlOrRd",
+                        labels={"avg_risk": "Avg Risk Score", "county": "County"})
+    fig_county.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400,
+                             yaxis=dict(autorange="reversed"))
+
+    return fig_map, fig_choro, fig_county
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Timeline
+# ---------------------------------------------------------------------------
+@app.callback(
+    [Output("eos-timeline", "figure"),
+     Output("eol-timeline", "figure"),
+     Output("overdue-table-container", "children")],
+    [Input("current-page", "data"),
+     Input("filter-state", "value"),
+     Input("filter-affiliate", "value"),
+     Input("filter-device-type", "value"),
+     Input("filter-lifecycle", "value"),
+     Input("filtered-data-signal", "data")],
+)
+def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal):
+    if page != "timeline":
+        return [go.Figure()] * 2 + [html.Div()]
+
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    df = df[df["exception_flagged"] != True]
+
+    today = pd.Timestamp.now().normalize()
+
+    # EoS timeline
+    eos_df = df[df["eos_date"].notna()].copy()
+    eos_by_date = eos_df.groupby([pd.Grouper(key="eos_date", freq="QE"), "device_type"]).size().reset_index(name="count")
+    fig_eos = px.bar(eos_by_date, x="eos_date", y="count", color="device_type",
+                     color_discrete_map=DEVICE_TYPE_COLORS,
+                     labels={"eos_date": "End-of-Sale Date", "count": "Devices"})
+    fig_eos.add_vline(x=today, line_dash="dash", line_color="red",
+                      annotation_text="Today", annotation_position="top right")
+    fig_eos.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350,
+                          barmode="stack")
+
+    # EoL timeline
+    eol_df = df[df["eol_date"].notna()].copy()
+    eol_by_date = eol_df.groupby([pd.Grouper(key="eol_date", freq="QE"), "device_type"]).size().reset_index(name="count")
+    fig_eol = px.bar(eol_by_date, x="eol_date", y="count", color="device_type",
+                     color_discrete_map=DEVICE_TYPE_COLORS,
+                     labels={"eol_date": "End-of-Life Date", "count": "Devices"})
+    fig_eol.add_vline(x=today, line_dash="dash", line_color="red",
+                      annotation_text="Today", annotation_position="top right")
+    fig_eol.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350,
+                          barmode="stack")
+
+    # Overdue devices table
+    overdue = df[(df["lifecycle_status"] == "Past EoL")].copy()
+    overdue = overdue.sort_values("risk_score", ascending=False)
+    overdue["eol_date_str"] = overdue["eol_date"].dt.strftime("%Y-%m-%d")
+    overdue["days_overdue"] = (today - overdue["eol_date"]).dt.days
+
+    table_data = overdue[["hostname", "model", "device_type", "state", "site_code",
+                          "eol_date_str", "days_overdue", "risk_score"]].head(100)
+    table = dash_table.DataTable(
+        data=table_data.to_dict("records"),
+        columns=[
+            {"name": "Hostname", "id": "hostname"},
+            {"name": "Model", "id": "model"},
+            {"name": "Type", "id": "device_type"},
+            {"name": "State", "id": "state"},
+            {"name": "Site", "id": "site_code"},
+            {"name": "EoL Date", "id": "eol_date_str"},
+            {"name": "Days Overdue", "id": "days_overdue"},
+            {"name": "Risk Score", "id": "risk_score"},
+        ],
+        page_size=15,
+        style_table={"overflowX": "auto"},
+        style_cell={"textAlign": "left", "padding": "8px", "fontSize": "13px"},
+        style_header={"fontWeight": "bold", "backgroundColor": "#f8f9fa"},
+        style_data_conditional=[
+            {"if": {"filter_query": "{risk_score} >= 75"}, "backgroundColor": "#f8d7da"},
+            {"if": {"filter_query": "{risk_score} >= 50 && {risk_score} < 75"}, "backgroundColor": "#fff3cd"},
+        ],
+        sort_action="native",
+        filter_action="native",
+    )
+
+    return fig_eos, fig_eol, html.Div([
+        html.P(f"{len(overdue):,} devices past End-of-Life still in production", className="text-danger fw-bold"),
+        table,
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Proximity Analysis
+# ---------------------------------------------------------------------------
+@app.callback(
+    [Output("proximity-map", "figure"),
+     Output("cluster-details", "children")],
+    [Input("current-page", "data"),
+     Input("proximity-radius", "value"),
+     Input("proximity-min-sites", "value"),
+     Input("filter-state", "value"),
+     Input("filter-affiliate", "value"),
+     Input("filter-device-type", "value"),
+     Input("filter-lifecycle", "value"),
+     Input("filtered-data-signal", "data")],
+)
+def update_proximity(page, radius, min_sites, states, affiliates, dtypes, lifecycle, _signal):
+    if page != "proximity":
+        return go.Figure(), html.Div()
+
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    df = df[df["exception_flagged"] != True]
+    geo = df[df["latitude"].notna() & df["longitude"].notna()].copy()
+
+    # Aggregate to site level
+    sites = geo.groupby(["site_code", "latitude", "longitude", "site_name", "state"]).agg(
+        device_count=("device_id", "count"),
+        avg_risk=("risk_score", "mean"),
+        total_cost=("total_refresh_cost", "sum"),
+        past_eol=("lifecycle_status", lambda x: (x == "Past EoL").sum()),
+    ).reset_index()
+
+    if len(sites) < 2:
+        return go.Figure(), html.P("Not enough sites for clustering.")
+
+    # DBSCAN clustering using haversine
+    coords = np.radians(sites[["latitude", "longitude"]].values)
+    earth_radius_miles = 3958.8
+    eps_radians = radius / earth_radius_miles
+    db = DBSCAN(eps=eps_radians, min_samples=min_sites, metric="haversine")
+    sites["cluster"] = db.fit_predict(coords)
+
+    # Filter to actual clusters (not noise = -1)
+    clustered = sites[sites["cluster"] >= 0].copy()
+    noise = sites[sites["cluster"] < 0].copy()
+
+    # Create map
+    fig = go.Figure()
+
+    # Add noise points (unclustered)
+    if len(noise) > 0:
+        fig.add_trace(go.Scattermap(
+            lat=noise["latitude"],
+            lon=noise["longitude"],
+            mode="markers",
+            marker=dict(size=6, color="#6c757d", opacity=0.4),
+            name="Unclustered",
+            hovertext=noise["site_name"],
+        ))
+
+    # Add clustered points with color by cluster
+    if len(clustered) > 0:
+        n_clusters = clustered["cluster"].nunique()
+        colors = px.colors.qualitative.Set2[:max(n_clusters, 1)]
+        for i, cluster_id in enumerate(sorted(clustered["cluster"].unique())):
+            c = clustered[clustered["cluster"] == cluster_id]
+            color = colors[i % len(colors)]
+            fig.add_trace(go.Scattermap(
+                lat=c["latitude"],
+                lon=c["longitude"],
+                mode="markers",
+                marker=dict(size=12, color=color, opacity=0.8),
+                name=f"Cluster {cluster_id + 1}",
+                hovertext=[
+                    f"{row.site_name}<br>Devices: {row.device_count}<br>Risk: {row.avg_risk:.0f}<br>Cost: ${row.total_cost:,.0f}"
+                    for _, row in c.iterrows()
+                ],
+            ))
+
+    fig.update_layout(
+        map=dict(style="carto-positron", center=dict(lat=33.0, lon=-85.0), zoom=5),
+        margin=dict(t=0, b=0, l=0, r=0),
+        legend=dict(orientation="h"),
+    )
+
+    # Cluster summary table
+    if len(clustered) > 0:
+        cluster_summary = clustered.groupby("cluster").agg(
+            sites=("site_code", "count"),
+            total_devices=("device_count", "sum"),
+            avg_risk=("avg_risk", "mean"),
+            total_cost=("total_cost", "sum"),
+            past_eol=("past_eol", "sum"),
+            states=("state", lambda x: ", ".join(sorted(x.unique()))),
+        ).reset_index()
+        cluster_summary["cluster"] = cluster_summary["cluster"] + 1
+        cluster_summary = cluster_summary.sort_values("avg_risk", ascending=False)
+
+        table = dash_table.DataTable(
+            data=cluster_summary.to_dict("records"),
+            columns=[
+                {"name": "Cluster", "id": "cluster"},
+                {"name": "Sites", "id": "sites"},
+                {"name": "Total Devices", "id": "total_devices"},
+                {"name": "Avg Risk", "id": "avg_risk", "type": "numeric", "format": {"specifier": ".1f"}},
+                {"name": "Total Cost", "id": "total_cost", "type": "numeric",
+                 "format": {"locale": {"symbol": ["$", ""]}, "specifier": "$,.0f"}},
+                {"name": "Past EoL", "id": "past_eol"},
+                {"name": "States", "id": "states"},
+            ],
+            page_size=10,
+            style_cell={"textAlign": "left", "padding": "8px", "fontSize": "13px"},
+            style_header={"fontWeight": "bold", "backgroundColor": "#f8f9fa"},
+            sort_action="native",
+        )
+        detail = html.Div([
+            html.P(f"Found {n_clusters} clusters with {len(clustered)} sites within {radius} mi radius.",
+                   className="fw-bold text-primary"),
+            table,
+        ])
+    else:
+        detail = html.P(f"No clusters found at {radius} mi radius with minimum {min_sites} sites.",
+                        className="text-muted")
+
+    return fig, detail
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Cost & Risk
+# ---------------------------------------------------------------------------
+@app.callback(
+    [Output("cost-by-lifecycle", "figure"),
+     Output("cost-by-type", "figure"),
+     Output("risk-vs-cost-scatter", "figure"),
+     Output("cost-by-affiliate", "figure"),
+     Output("cumulative-cost", "figure")],
+    [Input("current-page", "data"),
+     Input("filter-state", "value"),
+     Input("filter-affiliate", "value"),
+     Input("filter-device-type", "value"),
+     Input("filter-lifecycle", "value"),
+     Input("filtered-data-signal", "data")],
+)
+def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
+    if page != "cost":
+        return [go.Figure()] * 5
+
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    df = df[df["exception_flagged"] != True]
+
+    # Cost by lifecycle
+    cost_lc = df.groupby("lifecycle_status")["total_refresh_cost"].sum().reset_index()
+    fig_cost_lc = px.bar(cost_lc, x="lifecycle_status", y="total_refresh_cost",
+                         color="lifecycle_status", color_discrete_map=LIFECYCLE_COLORS,
+                         labels={"total_refresh_cost": "Total Cost ($)", "lifecycle_status": ""})
+    fig_cost_lc.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350, showlegend=False)
+
+    # Cost by device type
+    cost_dt = df.groupby("device_type").agg(
+        avg_cost=("total_refresh_cost", "mean"),
+        total_cost=("total_refresh_cost", "sum"),
+    ).reset_index()
+    fig_cost_dt = px.bar(cost_dt, x="device_type", y="avg_cost",
+                         color="device_type", color_discrete_map=DEVICE_TYPE_COLORS,
+                         labels={"avg_cost": "Avg Cost per Device ($)", "device_type": ""})
+    fig_cost_dt.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350, showlegend=False)
+
+    # Risk vs cost scatter (by site)
+    site_data = df.groupby("site_code").agg(
+        avg_risk=("risk_score", "mean"),
+        total_cost=("total_refresh_cost", "sum"),
+        count=("device_id", "count"),
+        state=("state", "first"),
+    ).reset_index()
+    site_data = site_data[site_data["total_cost"] > 0]
+    fig_scatter = px.scatter(site_data, x="avg_risk", y="total_cost",
+                             size="count", color="state",
+                             hover_name="site_code",
+                             labels={"avg_risk": "Average Risk Score",
+                                     "total_cost": "Total Refresh Cost ($)"},
+                             opacity=0.6)
+    fig_scatter.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
+
+    # Cost by affiliate
+    cost_aff = df.groupby("affiliate")["total_refresh_cost"].sum().sort_values(ascending=True).reset_index()
+    fig_cost_aff = px.bar(cost_aff, x="total_refresh_cost", y="affiliate", orientation="h",
+                          labels={"total_refresh_cost": "Total Cost ($)", "affiliate": ""})
+    fig_cost_aff.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
+
+    # Cumulative cost by EoL date (investment timeline)
+    eol_cost = df[df["eol_date"].notna() & (df["total_refresh_cost"] > 0)].copy()
+    eol_cost = eol_cost.sort_values("eol_date")
+    eol_cost["cumulative_cost"] = eol_cost["total_refresh_cost"].cumsum()
+    fig_cum = px.area(eol_cost, x="eol_date", y="cumulative_cost",
+                      labels={"eol_date": "End-of-Life Date", "cumulative_cost": "Cumulative Cost ($)"})
+    fig_cum.add_vline(x=pd.Timestamp.now(), line_dash="dash", line_color="red",
+                      annotation_text="Today")
+    fig_cum.update_layout(margin=dict(t=30, b=10, l=10, r=10), height=350)
+
+    return fig_cost_lc, fig_cost_dt, fig_scatter, fig_cost_aff, fig_cum
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Exceptions
+# ---------------------------------------------------------------------------
+@app.callback(
+    Output("exception-search-results", "children"),
+    Input("exception-search-btn", "n_clicks"),
+    State("exception-search", "value"),
+    prevent_initial_call=True,
+)
+def search_for_exceptions(n, query):
+    if not query or len(query) < 2:
+        return html.P("Enter at least 2 characters to search.", className="text-muted")
+
+    q = query.upper()
+    matches = DF[
+        (DF["hostname"].str.upper().str.contains(q, na=False)) |
+        (DF["serial_number"].str.upper().str.contains(q, na=False))
+    ].head(50)
+
+    if len(matches) == 0:
+        return html.P("No devices found.", className="text-muted")
+
+    rows = []
+    exceptions = load_exceptions()
+    for _, row in matches.iterrows():
+        is_flagged = str(row["serial_number"]) in exceptions
+        rows.append(
+            dbc.Card(dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.Strong(row["hostname"]),
+                        html.Span(f" — {row['model']} ({row['device_type']})", className="text-muted ms-2"),
+                        html.Br(),
+                        html.Small(f"SN: {row['serial_number']} | Site: {row['site_code']} | State: {row['state']}",
+                                   className="text-muted"),
+                    ], md=8),
+                    dbc.Col([
+                        dbc.Badge(row["lifecycle_status"],
+                                  color={"Past EoL": "danger", "Past EoS": "warning",
+                                         "Current": "success"}.get(row["lifecycle_status"], "secondary"),
+                                  className="me-2"),
+                        dbc.Button(
+                            "Unflag" if is_flagged else "Flag Exception",
+                            id={"type": "exception-toggle", "index": str(row["serial_number"])},
+                            color="outline-danger" if is_flagged else "outline-warning",
+                            size="sm",
+                        ),
+                    ], md=4, className="text-end"),
+                ]),
+                dbc.Collapse(
+                    dbc.Input(
+                        id={"type": "exception-reason", "index": str(row["serial_number"])},
+                        placeholder="Reason for exception...",
+                        className="mt-2",
+                        value=exceptions.get(str(row["serial_number"]), {}).get("reason", ""),
+                    ),
+                    is_open=not is_flagged,
+                ),
+            ]), className="mb-2 shadow-sm"),
+        )
+
+    return html.Div(rows)
+
+
+@app.callback(
+    Output("exception-list", "children"),
+    [Input("current-page", "data"),
+     Input({"type": "exception-toggle", "index": ALL}, "n_clicks")],
+    [State({"type": "exception-reason", "index": ALL}, "value"),
+     State({"type": "exception-toggle", "index": ALL}, "id")],
+)
+def manage_exceptions(page, clicks, reasons, ids):
+    ctx = callback_context
+    exceptions = load_exceptions()
+
+    # Handle toggle clicks
+    if ctx.triggered and ctx.triggered[0]["prop_id"] != "current-page.data":
+        for i, click in enumerate(clicks or []):
+            if click and i < len(ids):
+                serial = ids[i]["index"]
+                if serial in exceptions:
+                    del exceptions[serial]
+                else:
+                    reason = reasons[i] if i < len(reasons) and reasons[i] else ""
+                    exceptions[serial] = {
+                        "reason": reason,
+                        "flagged_at": pd.Timestamp.now().isoformat(),
+                    }
+        save_exceptions(exceptions)
+
+    # Display current exceptions
+    if not exceptions:
+        return html.P("No exceptions flagged.", className="text-muted")
+
+    rows = []
+    for serial, info in exceptions.items():
+        device = DF[DF["serial_number"] == serial]
+        if len(device) > 0:
+            d = device.iloc[0]
+            rows.append(html.Li([
+                html.Strong(d["hostname"]),
+                f" ({d['model']}) — SN: {serial}",
+                html.Br(),
+                html.Small(f"Reason: {info.get('reason', 'No reason given')} | "
+                           f"Flagged: {info.get('flagged_at', 'Unknown')}", className="text-muted"),
+            ], className="mb-2"))
+        else:
+            rows.append(html.Li(f"SN: {serial} — {info.get('reason', '')}", className="mb-2"))
+
+    return html.Ul(rows, className="list-unstyled")
+
+
+@app.callback(
+    Output("exception-count-badge", "children"),
+    [Input("current-page", "data"),
+     Input({"type": "exception-toggle", "index": ALL}, "n_clicks")],
+)
+def update_exception_count(page, clicks):
+    exceptions = load_exceptions()
+    return dbc.Badge(f"{len(exceptions)} exceptions flagged",
+                     color="warning" if exceptions else "secondary",
+                     className="fs-6")
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Priorities
+# ---------------------------------------------------------------------------
+@app.callback(
+    [Output("priority-sites", "figure"),
+     Output("priority-models", "figure"),
+     Output("refresh-schedule-table", "children")],
+    [Input("current-page", "data"),
+     Input("filter-state", "value"),
+     Input("filter-affiliate", "value"),
+     Input("filter-device-type", "value"),
+     Input("filter-lifecycle", "value"),
+     Input("filtered-data-signal", "data")],
+)
+def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal):
+    if page != "priorities":
+        return [go.Figure()] * 2 + [html.Div()]
+
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    df = df[df["exception_flagged"] != True]
+
+    # Top risk sites
+    site_risk = df.groupby(["site_code", "site_name", "state", "affiliate"]).agg(
+        avg_risk=("risk_score", "mean"),
+        device_count=("device_id", "count"),
+        past_eol=("lifecycle_status", lambda x: (x == "Past EoL").sum()),
+        total_cost=("total_refresh_cost", "sum"),
+    ).reset_index()
+    top_sites = site_risk.sort_values("avg_risk", ascending=False).head(20)
+    fig_sites = px.bar(top_sites, x="avg_risk", y="site_code", orientation="h",
+                       color="avg_risk", color_continuous_scale="YlOrRd",
+                       hover_data={"site_name": True, "device_count": True, "past_eol": True,
+                                   "total_cost": ":$,.0f", "affiliate": True},
+                       labels={"avg_risk": "Avg Risk Score", "site_code": "Site"})
+    fig_sites.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=500,
+                            yaxis=dict(autorange="reversed"))
+
+    # Priority models
+    model_risk = df.groupby(["model", "model_parent", "device_type"]).agg(
+        avg_risk=("risk_score", "mean"),
+        count=("device_id", "count"),
+        total_cost=("total_refresh_cost", "sum"),
+    ).reset_index()
+    model_risk["priority_score"] = model_risk["avg_risk"] * np.log1p(model_risk["count"])
+    top_models = model_risk.sort_values("priority_score", ascending=False).head(20)
+    fig_models = px.bar(top_models, x="priority_score", y="model", orientation="h",
+                        color="device_type", color_discrete_map=DEVICE_TYPE_COLORS,
+                        hover_data={"count": True, "avg_risk": ":.1f", "total_cost": ":$,.0f"},
+                        labels={"priority_score": "Priority Score", "model": "Model"})
+    fig_models.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=500,
+                             yaxis=dict(autorange="reversed"))
+
+    # Refresh schedule recommendation
+    today = pd.Timestamp.now()
+    schedule_data = []
+
+    # Phase 1: Critical - Past EoL
+    p1 = df[df["lifecycle_status"] == "Past EoL"]
+    schedule_data.append({
+        "Phase": "1 — Immediate",
+        "Criteria": "Past End-of-Life",
+        "Devices": len(p1),
+        "Sites": p1["site_code"].nunique(),
+        "Est. Cost": f"${p1['total_refresh_cost'].sum():,.0f}",
+        "Timeline": "0-6 months",
+        "Risk": "Critical — No vendor support, security vulnerabilities",
+    })
+
+    # Phase 2: High - Past EoS
+    p2 = df[df["lifecycle_status"] == "Past EoS"]
+    schedule_data.append({
+        "Phase": "2 — Near-Term",
+        "Criteria": "Past End-of-Sale",
+        "Devices": len(p2),
+        "Sites": p2["site_code"].nunique(),
+        "Est. Cost": f"${p2['total_refresh_cost'].sum():,.0f}",
+        "Timeline": "6-18 months",
+        "Risk": "High — Limited procurement, approaching EoL",
+    })
+
+    # Phase 3: EoS within 1yr
+    p3 = df[df["lifecycle_status"] == "EoS within 1yr"]
+    schedule_data.append({
+        "Phase": "3 — Planning",
+        "Criteria": "EoS within 1 year",
+        "Devices": len(p3),
+        "Sites": p3["site_code"].nunique(),
+        "Est. Cost": f"${p3['total_refresh_cost'].sum():,.0f}",
+        "Timeline": "12-24 months",
+        "Risk": "Medium — Plan procurement before EoS",
+    })
+
+    # Phase 4: In scope
+    p4 = df[(df["in_scope"] == "Yes") & (df["lifecycle_status"] == "Current")]
+    schedule_data.append({
+        "Phase": "4 — Strategic",
+        "Criteria": "In-Scope, still Current",
+        "Devices": len(p4),
+        "Sites": p4["site_code"].nunique(),
+        "Est. Cost": f"${p4['total_refresh_cost'].sum():,.0f}",
+        "Timeline": "18-36 months",
+        "Risk": "Low — Proactive lifecycle management",
+    })
+
+    table = dash_table.DataTable(
+        data=schedule_data,
+        columns=[{"name": k, "id": k} for k in schedule_data[0].keys()],
+        style_cell={"textAlign": "left", "padding": "10px", "fontSize": "13px"},
+        style_header={"fontWeight": "bold", "backgroundColor": "#f8f9fa"},
+        style_data_conditional=[
+            {"if": {"filter_query": '{Phase} = "1 — Immediate"'}, "backgroundColor": "#f8d7da"},
+            {"if": {"filter_query": '{Phase} = "2 — Near-Term"'}, "backgroundColor": "#fff3cd"},
+            {"if": {"filter_query": '{Phase} = "3 — Planning"'}, "backgroundColor": "#d1ecf1"},
+            {"if": {"filter_query": '{Phase} = "4 — Strategic"'}, "backgroundColor": "#d4edda"},
+        ],
+    )
+
+    return fig_sites, fig_models, table
+
+
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    print("\n" + "=" * 60)
+    print("Southern Company Network Lifecycle Dashboard")
+    print("=" * 60)
+    print(f"Loaded {len(DF):,} devices")
+    print(f"Open http://localhost:8050 in your browser")
+    print("=" * 60 + "\n")
+    app.run(debug=True, port=8050)
