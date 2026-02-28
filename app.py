@@ -122,12 +122,24 @@ def make_kpi_card(title, value, icon, color="primary"):
     return dbc.Card(
         dbc.CardBody([
             html.Div([
-                html.I(className=f"fas fa-{icon} fa-2x text-{color}", style={"opacity": "0.7"}),
-                html.Div([
-                    html.H3(value, className=f"text-{color} mb-0 fw-bold"),
-                    html.Small(title, className="text-muted"),
-                ], className="text-end"),
-            ], className="d-flex justify-content-between align-items-center"),
+                html.Div(
+                    html.I(
+                        className=f"fas fa-{icon} text-{color}",
+                        style={"fontSize": "1.5rem", "opacity": "0.7"},
+                    ),
+                    className="mb-2",
+                ),
+                html.H3(
+                    value,
+                    className=f"text-{color} mb-1 fw-bold",
+                    style={
+                        "fontSize": "1.6rem",
+                        "lineHeight": "1.1",
+                        "wordBreak": "break-word",
+                    },
+                ),
+                html.Small(title, className="text-muted d-block"),
+            ]),
         ]),
         className="shadow-sm h-100",
     )
