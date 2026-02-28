@@ -122,12 +122,24 @@ def make_kpi_card(title, value, icon, color="primary"):
     return dbc.Card(
         dbc.CardBody([
             html.Div([
-                html.I(className=f"fas fa-{icon} fa-2x text-{color}", style={"opacity": "0.7"}),
-                html.Div([
-                    html.H3(value, className=f"text-{color} mb-0 fw-bold"),
-                    html.Small(title, className="text-muted"),
-                ], className="text-end"),
-            ], className="d-flex justify-content-between align-items-center"),
+                html.Div(
+                    html.I(
+                        className=f"fas fa-{icon} text-{color}",
+                        style={"fontSize": "1.5rem", "opacity": "0.7"},
+                    ),
+                    className="mb-2",
+                ),
+                html.H3(
+                    value,
+                    className=f"text-{color} mb-1 fw-bold",
+                    style={
+                        "fontSize": "1.6rem",
+                        "lineHeight": "1.1",
+                        "wordBreak": "break-word",
+                    },
+                ),
+                html.Small(title, className="text-muted d-block"),
+            ]),
         ]),
         className="shadow-sm h-100",
     )
@@ -564,6 +576,9 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
                     color=dt_counts.index,
                     color_discrete_map=DEVICE_TYPE_COLORS,
                     hole=0.4)
+    fig_dt.update_traces(
+        hovertemplate="<b>%{label}</b><br>%{value:,} devices<br>%{percent}<extra></extra>"
+    )
     fig_dt.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300,
                          legend=dict(orientation="h", yanchor="bottom", y=-0.3))
 
@@ -573,6 +588,9 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
                     color=lc_counts.index,
                     color_discrete_map=LIFECYCLE_COLORS,
                     hole=0.4)
+    fig_lc.update_traces(
+        hovertemplate="<b>%{label}</b><br>%{value:,} devices<br>%{percent}<extra></extra>"
+    )
     fig_lc.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300,
                          legend=dict(orientation="h", yanchor="bottom", y=-0.3))
 
@@ -582,6 +600,9 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
                       color=risk_counts.index,
                       color_discrete_map=RISK_COLORS,
                       labels={"x": "Risk Tier", "y": "Device Count"})
+    fig_risk.update_traces(
+        hovertemplate="<b>%{x}</b><br>%{y:,} devices<extra></extra>"
+    )
     fig_risk.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300, showlegend=False)
 
     # By state
@@ -589,32 +610,52 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
         count=("device_id", "count"),
         avg_risk=("risk_score", "mean")
     ).sort_values("count", ascending=True).tail(15)
-    fig_state = px.bar(state_counts, x="count", y=state_counts.index, orientation="h",
-                       color="avg_risk", color_continuous_scale="YlOrRd",
-                       labels={"count": "Devices", "y": "State", "avg_risk": "Avg Risk"})
-    fig_state.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400)
+    fig_state = go.Figure(go.Bar(
+        x=state_counts["count"],
+        y=state_counts.index,
+        orientation="h",
+        marker=dict(color=state_counts["avg_risk"], colorscale="YlOrRd",
+                    colorbar=dict(title="Avg Risk")),
+        hovertemplate="<b>%{y}</b><br>Devices: %{x:,}<br>Avg Risk: %{marker.color:.1f}<extra></extra>",
+    ))
+    fig_state.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400,
+                            xaxis_title="Devices", yaxis_title="State")
 
     # By affiliate
     aff_counts = df.groupby("affiliate").agg(
         count=("device_id", "count"),
         avg_risk=("risk_score", "mean")
     ).sort_values("count", ascending=True)
-    fig_aff = px.bar(aff_counts, x="count", y=aff_counts.index, orientation="h",
-                     color="avg_risk", color_continuous_scale="YlOrRd",
-                     labels={"count": "Devices", "y": "Affiliate", "avg_risk": "Avg Risk"})
-    fig_aff.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400)
+    fig_aff = go.Figure(go.Bar(
+        x=aff_counts["count"],
+        y=aff_counts.index,
+        orientation="h",
+        marker=dict(color=aff_counts["avg_risk"], colorscale="YlOrRd",
+                    colorbar=dict(title="Avg Risk")),
+        hovertemplate="<b>%{y}</b><br>Devices: %{x:,}<br>Avg Risk: %{marker.color:.1f}<extra></extra>",
+    ))
+    fig_aff.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400,
+                          xaxis_title="Devices", yaxis_title="Affiliate")
 
     # Top models
     model_counts = df["model"].value_counts().head(15)
     model_lifecycle = df[df["model"].isin(model_counts.index)].groupby("model")["lifecycle_status"].apply(
         lambda x: x.mode()[0] if len(x) > 0 else "Unknown"
     )
-    fig_models = px.bar(x=model_counts.values, y=model_counts.index, orientation="h",
-                        color=[model_lifecycle.get(m, "Unknown") for m in model_counts.index],
-                        color_discrete_map=LIFECYCLE_COLORS,
-                        labels={"x": "Count", "y": "Model", "color": "Lifecycle"})
+    model_colors = [model_lifecycle.get(m, "Unknown") for m in model_counts.index]
+    fig_models = go.Figure()
+    for status in LIFECYCLE_COLORS:
+        mask = [c == status for c in model_colors]
+        if any(mask):
+            vals = [v for v, m in zip(model_counts.values, mask) if m]
+            names = [n for n, m in zip(model_counts.index, mask) if m]
+            fig_models.add_trace(go.Bar(
+                x=vals, y=names, orientation="h",
+                name=status, marker_color=LIFECYCLE_COLORS[status],
+                hovertemplate="<b>%{y}</b><br>Count: %{x:,}<br>Status: " + status + "<extra></extra>",
+            ))
     fig_models.update_layout(margin=dict(t=10, b=30, l=10, r=10), height=400,
-                             yaxis=dict(autorange="reversed"))
+                             yaxis=dict(autorange="reversed"), barmode="stack")
 
     return kpi_row, fig_dt, fig_lc, fig_risk, fig_state, fig_aff, fig_models
 
@@ -650,6 +691,18 @@ def update_map(page, states, affiliates, dtypes, lifecycle, _signal):
         total_cost=("total_refresh_cost", "sum"),
     ).reset_index()
 
+    # Build clean hover text for map
+    site_agg["hover_text"] = site_agg.apply(
+        lambda r: (
+            f"<b>{r['site_name']}</b><br>"
+            f"State: {r['state']} | County: {r['county']}<br>"
+            f"Devices: {int(r['device_count']):,}<br>"
+            f"Avg Risk Score: {r['avg_risk']:.1f}<br>"
+            f"Past EoL: {int(r['past_eol'])} | Past EoS: {int(r['past_eos'])}<br>"
+            f"Refresh Cost: ${r['total_cost']:,.0f}"
+        ), axis=1
+    )
+
     fig_map = px.scatter_map(
         site_agg,
         lat="latitude",
@@ -657,20 +710,13 @@ def update_map(page, states, affiliates, dtypes, lifecycle, _signal):
         size="device_count",
         color="avg_risk",
         color_continuous_scale="YlOrRd",
-        hover_name="site_name",
-        hover_data={
-            "device_count": True,
-            "avg_risk": ":.1f",
-            "past_eol": True,
-            "past_eos": True,
-            "state": True,
-            "county": True,
-            "latitude": False,
-            "longitude": False,
-        },
         size_max=25,
         zoom=5,
         center={"lat": 33.0, "lon": -85.0},
+    )
+    fig_map.update_traces(
+        hovertemplate="%{customdata[0]}<extra></extra>",
+        customdata=site_agg[["hover_text"]].values,
     )
     fig_map.update_layout(
         margin=dict(t=0, b=0, l=0, r=0),
@@ -686,8 +732,11 @@ def update_map(page, states, affiliates, dtypes, lifecycle, _signal):
         state_risk, locations="state", locationmode="USA-states",
         color="avg_risk", color_continuous_scale="YlOrRd",
         scope="usa",
-        hover_data={"count": True, "avg_risk": ":.1f"},
         labels={"avg_risk": "Avg Risk Score"},
+    )
+    fig_choro.update_traces(
+        hovertemplate="<b>%{location}</b><br>Devices: %{customdata[0]:,}<br>Avg Risk: %{z:.1f}<extra></extra>",
+        customdata=state_risk[["count"]].values,
     )
     fig_choro.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400)
 
@@ -696,10 +745,16 @@ def update_map(page, states, affiliates, dtypes, lifecycle, _signal):
         avg_risk=("risk_score", "mean"),
         count=("device_id", "count"),
     ).sort_values("avg_risk", ascending=False).head(20).reset_index()
-    fig_county = px.bar(county_risk, x="avg_risk", y="county", orientation="h",
-                        color="avg_risk", color_continuous_scale="YlOrRd",
-                        labels={"avg_risk": "Avg Risk Score", "county": "County"})
+    fig_county = go.Figure(go.Bar(
+        x=county_risk["avg_risk"],
+        y=county_risk["county"],
+        orientation="h",
+        marker=dict(color=county_risk["avg_risk"], colorscale="YlOrRd"),
+        customdata=county_risk[["count"]].values,
+        hovertemplate="<b>%{y}</b><br>Avg Risk: %{x:.1f}<br>Devices: %{customdata[0]:,}<extra></extra>",
+    ))
     fig_county.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400,
+                             xaxis_title="Avg Risk Score", yaxis_title="County",
                              yaxis=dict(autorange="reversed"))
 
     return fig_map, fig_choro, fig_county
@@ -734,6 +789,9 @@ def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal):
     fig_eos = px.bar(eos_by_date, x="eos_date", y="count", color="device_type",
                      color_discrete_map=DEVICE_TYPE_COLORS,
                      labels={"eos_date": "End-of-Sale Date", "count": "Devices"})
+    fig_eos.update_traces(
+        hovertemplate="<b>%{fullData.name}</b><br>Quarter: %{x|%b %Y}<br>Devices: %{y:,}<extra></extra>"
+    )
     today_str = today.strftime("%Y-%m-%d")
     fig_eos.add_vline(x=today_str, line_dash="dash", line_color="red")
     fig_eos.add_annotation(x=today_str, y=1, yref="paper", text="Today",
@@ -747,6 +805,9 @@ def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal):
     fig_eol = px.bar(eol_by_date, x="eol_date", y="count", color="device_type",
                      color_discrete_map=DEVICE_TYPE_COLORS,
                      labels={"eol_date": "End-of-Life Date", "count": "Devices"})
+    fig_eol.update_traces(
+        hovertemplate="<b>%{fullData.name}</b><br>Quarter: %{x|%b %Y}<br>Devices: %{y:,}<extra></extra>"
+    )
     fig_eol.add_vline(x=today_str, line_dash="dash", line_color="red")
     fig_eol.add_annotation(x=today_str, y=1, yref="paper", text="Today",
                            showarrow=False, font=dict(color="red"))
@@ -945,6 +1006,9 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
     fig_cost_lc = px.bar(cost_lc, x="lifecycle_status", y="total_refresh_cost",
                          color="lifecycle_status", color_discrete_map=LIFECYCLE_COLORS,
                          labels={"total_refresh_cost": "Total Cost ($)", "lifecycle_status": ""})
+    fig_cost_lc.update_traces(
+        hovertemplate="<b>%{x}</b><br>Total Cost: $%{y:,.0f}<extra></extra>"
+    )
     fig_cost_lc.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350, showlegend=False)
 
     # Cost by device type
@@ -955,6 +1019,9 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
     fig_cost_dt = px.bar(cost_dt, x="device_type", y="avg_cost",
                          color="device_type", color_discrete_map=DEVICE_TYPE_COLORS,
                          labels={"avg_cost": "Avg Cost per Device ($)", "device_type": ""})
+    fig_cost_dt.update_traces(
+        hovertemplate="<b>%{x}</b><br>Avg Cost: $%{y:,.0f}<extra></extra>"
+    )
     fig_cost_dt.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350, showlegend=False)
 
     # Risk vs cost scatter (by site)
@@ -967,17 +1034,25 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
     site_data = site_data[site_data["total_cost"] > 0]
     fig_scatter = px.scatter(site_data, x="avg_risk", y="total_cost",
                              size="count", color="state",
-                             hover_name="site_code",
                              labels={"avg_risk": "Average Risk Score",
                                      "total_cost": "Total Refresh Cost ($)"},
                              opacity=0.6)
+    fig_scatter.update_traces(
+        hovertemplate="<b>%{hovertext}</b><br>Avg Risk: %{x:.1f}<br>Refresh Cost: $%{y:,.0f}<br>Devices: %{marker.size:,}<extra></extra>",
+        hovertext=site_data["site_code"],
+    )
     fig_scatter.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
 
     # Cost by affiliate
     cost_aff = df.groupby("affiliate")["total_refresh_cost"].sum().sort_values(ascending=True).reset_index()
-    fig_cost_aff = px.bar(cost_aff, x="total_refresh_cost", y="affiliate", orientation="h",
-                          labels={"total_refresh_cost": "Total Cost ($)", "affiliate": ""})
-    fig_cost_aff.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
+    fig_cost_aff = go.Figure(go.Bar(
+        x=cost_aff["total_refresh_cost"],
+        y=cost_aff["affiliate"],
+        orientation="h",
+        hovertemplate="<b>%{y}</b><br>Total Cost: $%{x:,.0f}<extra></extra>",
+    ))
+    fig_cost_aff.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350,
+                               xaxis_title="Total Cost ($)", yaxis_title="")
 
     # Cumulative cost by EoL date (investment timeline)
     eol_cost = df[df["eol_date"].notna() & (df["total_refresh_cost"] > 0)].copy()
@@ -985,6 +1060,9 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
     eol_cost["cumulative_cost"] = eol_cost["total_refresh_cost"].cumsum()
     fig_cum = px.area(eol_cost, x="eol_date", y="cumulative_cost",
                       labels={"eol_date": "End-of-Life Date", "cumulative_cost": "Cumulative Cost ($)"})
+    fig_cum.update_traces(
+        hovertemplate="EoL Date: %{x|%b %d, %Y}<br>Cumulative Cost: $%{y:,.0f}<extra></extra>"
+    )
     today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
     fig_cum.add_vline(x=today_str, line_dash="dash", line_color="red")
     fig_cum.add_annotation(x=today_str, y=1, yref="paper", text="Today",
@@ -1147,12 +1225,25 @@ def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal):
         total_cost=("total_refresh_cost", "sum"),
     ).reset_index()
     top_sites = site_risk.sort_values("avg_risk", ascending=False).head(20)
-    fig_sites = px.bar(top_sites, x="avg_risk", y="site_code", orientation="h",
-                       color="avg_risk", color_continuous_scale="YlOrRd",
-                       hover_data={"site_name": True, "device_count": True, "past_eol": True,
-                                   "total_cost": ":$,.0f", "affiliate": True},
-                       labels={"avg_risk": "Avg Risk Score", "site_code": "Site"})
+    fig_sites = go.Figure(go.Bar(
+        x=top_sites["avg_risk"],
+        y=top_sites["site_code"],
+        orientation="h",
+        marker=dict(color=top_sites["avg_risk"], colorscale="YlOrRd",
+                    colorbar=dict(title="Risk")),
+        customdata=top_sites[["site_name", "device_count", "past_eol", "total_cost", "affiliate"]].values,
+        hovertemplate=(
+            "<b>%{y}</b> — %{customdata[0]}<br>"
+            "Affiliate: %{customdata[4]}<br>"
+            "Avg Risk: %{x:.1f}<br>"
+            "Devices: %{customdata[1]:,}<br>"
+            "Past EoL: %{customdata[2]:,}<br>"
+            "Refresh Cost: $%{customdata[3]:,.0f}"
+            "<extra></extra>"
+        ),
+    ))
     fig_sites.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=500,
+                            xaxis_title="Avg Risk Score", yaxis_title="Site",
                             yaxis=dict(autorange="reversed"))
 
     # Priority models
@@ -1163,12 +1254,31 @@ def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal):
     ).reset_index()
     model_risk["priority_score"] = model_risk["avg_risk"] * np.log1p(model_risk["count"])
     top_models = model_risk.sort_values("priority_score", ascending=False).head(20)
-    fig_models = px.bar(top_models, x="priority_score", y="model", orientation="h",
-                        color="device_type", color_discrete_map=DEVICE_TYPE_COLORS,
-                        hover_data={"count": True, "avg_risk": ":.1f", "total_cost": ":$,.0f"},
-                        labels={"priority_score": "Priority Score", "model": "Model"})
+
+    fig_models = go.Figure()
+    for dtype in DEVICE_TYPE_COLORS:
+        subset = top_models[top_models["device_type"] == dtype]
+        if len(subset) > 0:
+            fig_models.add_trace(go.Bar(
+                x=subset["priority_score"],
+                y=subset["model"],
+                orientation="h",
+                name=dtype,
+                marker_color=DEVICE_TYPE_COLORS[dtype],
+                customdata=subset[["count", "avg_risk", "total_cost"]].values,
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Type: " + dtype + "<br>"
+                    "Priority Score: %{x:.1f}<br>"
+                    "Devices: %{customdata[0]:,}<br>"
+                    "Avg Risk: %{customdata[1]:.1f}<br>"
+                    "Refresh Cost: $%{customdata[2]:,.0f}"
+                    "<extra></extra>"
+                ),
+            ))
     fig_models.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=500,
-                             yaxis=dict(autorange="reversed"))
+                             xaxis_title="Priority Score", yaxis_title="Model",
+                             yaxis=dict(autorange="reversed"), barmode="stack")
 
     # Refresh schedule recommendation
     today = pd.Timestamp.now()
