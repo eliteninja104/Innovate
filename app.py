@@ -579,8 +579,18 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
     fig_dt.update_traces(
         hovertemplate="<b>%{label}</b><br>%{value:,} devices<br>%{percent}<extra></extra>"
     )
-    fig_dt.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300,
-                         legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+    fig_dt.update_layout(
+        margin=dict(t=10, b=10, l=10, r=10),
+        height=300,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.12,
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(0,0,0,0)",
+        ),
+    )
 
     # Lifecycle pie
     lc_counts = df["lifecycle_status"].value_counts()
@@ -591,8 +601,18 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
     fig_lc.update_traces(
         hovertemplate="<b>%{label}</b><br>%{value:,} devices<br>%{percent}<extra></extra>"
     )
-    fig_lc.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300,
-                         legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+    fig_lc.update_layout(
+        margin=dict(t=10, b=10, l=10, r=10),
+        height=300,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.12,
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(0,0,0,0)",
+        ),
+    )
 
     # Risk distribution
     risk_counts = df["risk_tier"].value_counts().reindex(["Low", "Medium", "High", "Critical"], fill_value=0)
