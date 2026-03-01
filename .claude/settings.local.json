@@ -4,7 +4,8 @@
       "Bash(pip --version:*)",
       "Bash(pip install:*)",
       "Bash(python -c:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(python3:*)"
     ]
   }
 }
