@@ -190,23 +190,28 @@ def make_sidebar():
     logo_src = get_logo_src()
     return html.Div([
         html.Div([
-            html.Div(
+            html.Button(
                 html.Img(
                     src=logo_src,
                     alt="Southern Company logo",
                     style={
-                        "width": "88px",
-                        "height": "36px",
-                        "objectFit": "cover",
-                        "objectPosition": "left center",
+                        "width": "185px",
+                        "height": "auto",
                         "display": "block",
                     },
                 ),
-                className="mb-3",
+                id="logo-home",
+                type="button",
+                style={
+                    "padding": "0",
+                    "border": "0",
+                    "background": "transparent",
+                    "display": "block",
+                    "margin": "0 auto",
+                    "cursor": "pointer",
+                },
             ) if logo_src else None,
-            html.H5("Southern Company", className="fw-bold mb-0", style={"color": "#FFFFFF"}),
-            html.Small("Network Lifecycle Dashboard", style={"color": "#FFFFFF", "opacity": "0.9"}),
-        ], className="p-3 bg-dark"),
+        ], className="text-center", style={"padding": "12px 10px", "backgroundColor": "#2F3A3D"}),
 
         html.Hr(className="my-0"),
 
@@ -526,6 +531,7 @@ app.layout = html.Div([
 NAV_IDS = ["nav-overview", "nav-map", "nav-timeline", "nav-proximity",
            "nav-cost", "nav-exceptions", "nav-priorities"]
 PAGE_MAP = {
+    "logo-home": "overview",
     "nav-overview": "overview",
     "nav-map": "map",
     "nav-timeline": "timeline",
@@ -538,7 +544,7 @@ PAGE_MAP = {
 
 @app.callback(
     Output("current-page", "data"),
-    [Input(nid, "n_clicks") for nid in NAV_IDS],
+    [Input("logo-home", "n_clicks")] + [Input(nid, "n_clicks") for nid in NAV_IDS],
     prevent_initial_call=True,
 )
 def switch_page(*args):
