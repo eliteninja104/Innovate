@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Dash, html, dcc, callback_context, dash_table, Input, Output, State, ALL, MATCH
+from dash import Dash, html, dcc, callback_context, dash_table, Input, Output, State, ALL, MATCH, no_update
 import dash_bootstrap_components as dbc
 from sklearn.cluster import DBSCAN
 
@@ -102,8 +102,16 @@ FILTER_OPTS = get_filter_options(DF)
 
 
 def apply_filters(df, states, affiliates, device_types, lifecycle_statuses):
-    """Apply dashboard filters."""
+    """Apply dashboard filters and live exception flags."""
     filtered = df.copy()
+
+    # Apply live exceptions from JSON (not just the CSV column)
+    exceptions = load_exceptions()
+    if exceptions:
+        filtered["exception_flagged"] = filtered["serial_number"].isin(exceptions.keys())
+    else:
+        filtered["exception_flagged"] = False
+
     if states:
         filtered = filtered[filtered["state"].isin(states)]
     if affiliates:
@@ -428,6 +436,7 @@ def priorities_page():
 app.layout = html.Div([
     dcc.Store(id="current-page", data="overview"),
     dcc.Store(id="filtered-data-signal", data=0),
+    dcc.Store(id="exceptions-signal", data=0),
     make_sidebar(),
     html.Div([
         html.Div([
@@ -515,11 +524,16 @@ def refresh_data(n):
     [Input("filter-state", "value"),
      Input("filter-affiliate", "value"),
      Input("filter-device-type", "value"),
-     Input("filter-lifecycle", "value")],
+     Input("filter-lifecycle", "value"),
+     Input("exceptions-signal", "data")],
 )
-def update_filter_summary(states, affiliates, dtypes, lifecycle):
+def update_filter_summary(states, affiliates, dtypes, lifecycle, _exc_signal):
     df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
-    parts = [f"{len(df):,} devices"]
+    active = df[~df["exception_flagged"]]
+    excepted = df["exception_flagged"].sum()
+    parts = [f"{len(active):,} devices"]
+    if excepted > 0:
+        parts.append(f"{excepted} excepted")
     if states:
         parts.append(f"{len(states)} state(s)")
     if affiliates:
@@ -543,11 +557,12 @@ def update_filter_summary(states, affiliates, dtypes, lifecycle):
      Input("filter-affiliate", "value"),
      Input("filter-device-type", "value"),
      Input("filter-lifecycle", "value"),
-     Input("filtered-data-signal", "data")],
+     Input("filtered-data-signal", "data"),
+     Input("exceptions-signal", "data")],
 )
-def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
+def update_overview(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal):
     if page != "overview":
-        return [html.Div()] + [go.Figure()] * 6
+        return [no_update] * 7
 
     df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
     # Exclude exceptions
@@ -672,11 +687,12 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal):
      Input("filter-affiliate", "value"),
      Input("filter-device-type", "value"),
      Input("filter-lifecycle", "value"),
-     Input("filtered-data-signal", "data")],
+     Input("filtered-data-signal", "data"),
+     Input("exceptions-signal", "data")],
 )
-def update_map(page, states, affiliates, dtypes, lifecycle, _signal):
+def update_map(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal):
     if page != "map":
-        return [go.Figure()] * 3
+        return [no_update] * 3
 
     df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
     df = df[df["exception_flagged"] != True]
@@ -772,11 +788,12 @@ def update_map(page, states, affiliates, dtypes, lifecycle, _signal):
      Input("filter-affiliate", "value"),
      Input("filter-device-type", "value"),
      Input("filter-lifecycle", "value"),
-     Input("filtered-data-signal", "data")],
+     Input("filtered-data-signal", "data"),
+     Input("exceptions-signal", "data")],
 )
-def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal):
+def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal):
     if page != "timeline":
-        return [go.Figure()] * 2 + [html.Div()]
+        return [no_update] * 3
 
     df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
     df = df[df["exception_flagged"] != True]
@@ -913,11 +930,12 @@ def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal):
      Input("filter-affiliate", "value"),
      Input("filter-device-type", "value"),
      Input("filter-lifecycle", "value"),
-     Input("filtered-data-signal", "data")],
+     Input("filtered-data-signal", "data"),
+     Input("exceptions-signal", "data")],
 )
-def update_proximity(page, radius, min_sites, states, affiliates, dtypes, lifecycle, _signal):
+def update_proximity(page, radius, min_sites, states, affiliates, dtypes, lifecycle, _signal, _exc_signal):
     if page != "proximity":
-        return go.Figure(), html.Div()
+        return [no_update] * 2
 
     df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
     df = df[df["exception_flagged"] != True]
@@ -1040,11 +1058,12 @@ def update_proximity(page, radius, min_sites, states, affiliates, dtypes, lifecy
      Input("filter-affiliate", "value"),
      Input("filter-device-type", "value"),
      Input("filter-lifecycle", "value"),
-     Input("filtered-data-signal", "data")],
+     Input("filtered-data-signal", "data"),
+     Input("exceptions-signal", "data")],
 )
-def update_cost(page, states, affiliates, dtypes, lifecycle, _signal):
+def update_cost(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal):
     if page != "cost":
-        return [go.Figure()] * 5
+        return [no_update] * 5
 
     df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
     df = df[df["exception_flagged"] != True]
@@ -1197,15 +1216,18 @@ def search_for_exceptions(n, query):
 
 
 @app.callback(
-    Output("exception-list", "children"),
+    [Output("exception-list", "children"),
+     Output("exceptions-signal", "data")],
     [Input("current-page", "data"),
      Input({"type": "exception-toggle", "index": ALL}, "n_clicks")],
     [State({"type": "exception-reason", "index": ALL}, "value"),
-     State({"type": "exception-toggle", "index": ALL}, "id")],
+     State({"type": "exception-toggle", "index": ALL}, "id"),
+     State("exceptions-signal", "data")],
 )
-def manage_exceptions(page, clicks, reasons, ids):
+def manage_exceptions(page, clicks, reasons, ids, prev_signal):
     ctx = callback_context
     exceptions = load_exceptions()
+    signal = prev_signal or 0
 
     # Handle toggle clicks
     if ctx.triggered and ctx.triggered[0]["prop_id"] != "current-page.data":
@@ -1221,10 +1243,15 @@ def manage_exceptions(page, clicks, reasons, ids):
                         "flagged_at": pd.Timestamp.now().isoformat(),
                     }
         save_exceptions(exceptions)
+        signal += 1  # bump signal so other pages re-render
+
+    # If not on exceptions page, don't try to update exception-list
+    if page != "exceptions":
+        return no_update, signal
 
     # Display current exceptions
     if not exceptions:
-        return html.P("No exceptions flagged.", className="text-muted")
+        return html.P("No exceptions flagged.", className="text-muted"), signal
 
     rows = []
     for serial, info in exceptions.items():
@@ -1241,7 +1268,7 @@ def manage_exceptions(page, clicks, reasons, ids):
         else:
             rows.append(html.Li(f"SN: {serial} — {info.get('reason', '')}", className="mb-2"))
 
-    return html.Ul(rows, className="list-unstyled")
+    return html.Ul(rows, className="list-unstyled"), signal
 
 
 @app.callback(
@@ -1250,6 +1277,8 @@ def manage_exceptions(page, clicks, reasons, ids):
      Input({"type": "exception-toggle", "index": ALL}, "n_clicks")],
 )
 def update_exception_count(page, clicks):
+    if page != "exceptions":
+        return no_update
     exceptions = load_exceptions()
     return dbc.Badge(f"{len(exceptions)} exceptions flagged",
                      color="warning" if exceptions else "secondary",
@@ -1268,11 +1297,12 @@ def update_exception_count(page, clicks):
      Input("filter-affiliate", "value"),
      Input("filter-device-type", "value"),
      Input("filter-lifecycle", "value"),
-     Input("filtered-data-signal", "data")],
+     Input("filtered-data-signal", "data"),
+     Input("exceptions-signal", "data")],
 )
-def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal):
+def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal):
     if page != "priorities":
-        return [go.Figure()] * 2 + [html.Div()]
+        return [no_update] * 3
 
     df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
     df = df[df["exception_flagged"] != True]
@@ -1418,4 +1448,4 @@ if __name__ == "__main__":
     print(f"Loaded {len(DF):,} devices")
     print(f"Open http://localhost:8050 in your browser")
     print("=" * 60 + "\n")
-    app.run(debug=True, port=8050)
+    app.run(debug=False, port=8050)
