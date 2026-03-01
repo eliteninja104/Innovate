@@ -7,3 +7,6 @@ nul
 .claude/settings.local.json
 .claude/settings.local.json
 .claude/settings.local.json
+.claude/settings.local.json
+pipeline_output/
+.Rhistory
