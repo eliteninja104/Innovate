@@ -5,6 +5,7 @@ Interactive web dashboard for network equipment lifecycle management.
 Run with: python app.py
 """
 
+import base64
 import json
 import math
 from pathlib import Path
@@ -29,6 +30,8 @@ app = Dash(
     title="Southern Co. Network Lifecycle Dashboard",
 )
 
+BASE_DIR = Path(__file__).resolve().parent
+
 # ---------------------------------------------------------------------------
 # Color schemes
 # ---------------------------------------------------------------------------
@@ -47,13 +50,43 @@ LIFECYCLE_COLORS = {
     "Unknown": "#6c757d",
 }
 
+BRAND_CHART_COLORS = [
+    "#ED1D24",
+    "#00BDF2",
+    "#007DBA",
+    "#B2D235",
+    "#9CC987",
+]
+
+BRAND_CONTINUOUS_SCALE = [
+    [0.0, "#9CC987"],
+    [0.25, "#B2D235"],
+    [0.5, "#00BDF2"],
+    [0.75, "#007DBA"],
+    [1.0, "#ED1D24"],
+]
+
 DEVICE_TYPE_COLORS = {
-    "Switch": "#0d6efd",
-    "Router": "#6610f2",
-    "Access Point": "#20c997",
-    "Wireless LAN Controller": "#0dcaf0",
-    "Voice Gateway": "#d63384",
+    "Switch": "#007DBA",
+    "Router": "#ED1D24",
+    "Access Point": "#00BDF2",
+    "Wireless LAN Controller": "#B2D235",
+    "Voice Gateway": "#9CC987",
 }
+
+LOGO_PATHS = [
+    BASE_DIR / "WHITE LOGO.png",
+    BASE_DIR / "BLACK LOGO.png",
+]
+
+
+def get_logo_src():
+    """Embed the local logo file so Dash can render it without an assets folder."""
+    for logo_path in LOGO_PATHS:
+        if logo_path.exists():
+            encoded = base64.b64encode(logo_path.read_bytes()).decode("ascii")
+            return f"data:image/png;base64,{encoded}"
+    return None
 
 # ---------------------------------------------------------------------------
 # Data Loading
@@ -154,10 +187,25 @@ def make_kpi_card(title, value, icon, color="primary"):
 
 
 def make_sidebar():
+    logo_src = get_logo_src()
     return html.Div([
         html.Div([
-            html.H5("Southern Company", className="text-white fw-bold mb-0"),
-            html.Small("Network Lifecycle Dashboard", className="text-light opacity-75"),
+            html.Div(
+                html.Img(
+                    src=logo_src,
+                    alt="Southern Company logo",
+                    style={
+                        "width": "88px",
+                        "height": "36px",
+                        "objectFit": "cover",
+                        "objectPosition": "left center",
+                        "display": "block",
+                    },
+                ),
+                className="mb-3",
+            ) if logo_src else None,
+            html.H5("Southern Company", className="fw-bold mb-0", style={"color": "#FFFFFF"}),
+            html.Small("Network Lifecycle Dashboard", style={"color": "#FFFFFF", "opacity": "0.9"}),
         ], className="p-3 bg-dark"),
 
         html.Hr(className="my-0"),
@@ -592,6 +640,7 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal, _exc_s
                     color_discrete_map=DEVICE_TYPE_COLORS,
                     hole=0.4)
     fig_dt.update_traces(
+        marker=dict(line=dict(color="#003087", width=1)),
         hovertemplate="<b>%{label}</b><br>%{value:,} devices<br>%{percent}<extra></extra>"
     )
     fig_dt.update_layout(
@@ -636,6 +685,8 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal, _exc_s
                       color_discrete_map=RISK_COLORS,
                       labels={"x": "Risk Tier", "y": "Device Count"})
     fig_risk.update_traces(
+        marker_line_color="#003087",
+        marker_line_width=1,
         hovertemplate="<b>%{x}</b><br>%{y:,} devices<extra></extra>"
     )
     fig_risk.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300, showlegend=False)
@@ -649,7 +700,7 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal, _exc_s
         x=state_counts["count"],
         y=state_counts.index,
         orientation="h",
-        marker=dict(color=state_counts["avg_risk"], colorscale="YlOrRd",
+        marker=dict(color=state_counts["avg_risk"], colorscale=BRAND_CONTINUOUS_SCALE,
                     colorbar=dict(title="Avg Risk")),
         hovertemplate="<b>%{y}</b><br>Devices: %{x:,}<br>Avg Risk: %{marker.color:.1f}<extra></extra>",
     ))
@@ -665,7 +716,7 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal, _exc_s
         x=aff_counts["count"],
         y=aff_counts.index,
         orientation="h",
-        marker=dict(color=aff_counts["avg_risk"], colorscale="YlOrRd",
+        marker=dict(color=aff_counts["avg_risk"], colorscale=BRAND_CONTINUOUS_SCALE,
                     colorbar=dict(title="Avg Risk")),
         hovertemplate="<b>%{y}</b><br>Devices: %{x:,}<br>Avg Risk: %{marker.color:.1f}<extra></extra>",
     ))
@@ -686,7 +737,7 @@ def update_overview(page, states, affiliates, dtypes, lifecycle, _signal, _exc_s
             names = [n for n, m in zip(model_counts.index, mask) if m]
             fig_models.add_trace(go.Bar(
                 x=vals, y=names, orientation="h",
-                name=status, marker_color=LIFECYCLE_COLORS[status],
+                name=status, marker_color=LIFECYCLE_COLORS[status], marker_line=dict(color="#003087", width=1),
                 hovertemplate="<b>%{y}</b><br>Count: %{x:,}<br>Status: " + status + "<extra></extra>",
             ))
     fig_models.update_layout(margin=dict(t=10, b=30, l=10, r=10), height=400,
@@ -745,7 +796,7 @@ def update_map(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal
         lon="longitude",
         size="device_count",
         color="avg_risk",
-        color_continuous_scale="YlOrRd",
+        color_continuous_scale=BRAND_CONTINUOUS_SCALE,
         size_max=25,
         zoom=5,
         center={"lat": 33.0, "lon": -85.0},
@@ -766,7 +817,7 @@ def update_map(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal
     ).reset_index()
     fig_choro = px.choropleth(
         state_risk, locations="state", locationmode="USA-states",
-        color="avg_risk", color_continuous_scale="YlOrRd",
+        color="avg_risk", color_continuous_scale=BRAND_CONTINUOUS_SCALE,
         scope="usa",
         labels={"avg_risk": "Avg Risk Score"},
     )
@@ -785,7 +836,7 @@ def update_map(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal
         x=county_risk["avg_risk"],
         y=county_risk["county"],
         orientation="h",
-        marker=dict(color=county_risk["avg_risk"], colorscale="YlOrRd"),
+        marker=dict(color=county_risk["avg_risk"], colorscale=BRAND_CONTINUOUS_SCALE),
         customdata=county_risk[["count"]].values,
         hovertemplate="<b>%{y}</b><br>Avg Risk: %{x:.1f}<br>Devices: %{customdata[0]:,}<extra></extra>",
     ))
@@ -831,6 +882,8 @@ def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal, _exc_s
                          "device_type": "Device Type",
                      })
     fig_eos.update_traces(
+        marker_line_color="#003087",
+        marker_line_width=1,
         hovertemplate="<b>%{fullData.name}</b><br>Quarter: %{x|%b %Y}<br>Devices: %{y:,}<extra></extra>"
     )
     today_str = today.strftime("%Y-%m-%d")
@@ -871,6 +924,8 @@ def update_timeline(page, states, affiliates, dtypes, lifecycle, _signal, _exc_s
                          "device_type": "Device Type",
                      })
     fig_eol.update_traces(
+        marker_line_color="#003087",
+        marker_line_width=1,
         hovertemplate="<b>%{fullData.name}</b><br>Quarter: %{x|%b %Y}<br>Devices: %{y:,}<extra></extra>"
     )
     fig_eol.add_vline(x=today_str, line_dash="dash", line_color="red")
@@ -1000,7 +1055,9 @@ def update_proximity(page, radius, min_sites, states, affiliates, dtypes, lifecy
     # Add clustered points with color by cluster
     if len(clustered) > 0:
         n_clusters = clustered["cluster"].nunique()
-        colors = px.colors.qualitative.Set2[:max(n_clusters, 1)]
+        colors = BRAND_CHART_COLORS[:max(n_clusters, 1)]
+        if n_clusters > len(colors):
+            colors = [BRAND_CHART_COLORS[i % len(BRAND_CHART_COLORS)] for i in range(n_clusters)]
         for i, cluster_id in enumerate(sorted(clustered["cluster"].unique())):
             c = clustered[clustered["cluster"] == cluster_id]
             color = colors[i % len(colors)]
@@ -1008,7 +1065,7 @@ def update_proximity(page, radius, min_sites, states, affiliates, dtypes, lifecy
                 lat=c["latitude"],
                 lon=c["longitude"],
                 mode="markers",
-                marker=dict(size=12, color=color, opacity=0.8),
+                marker=dict(size=12, color=color, opacity=0.8, line=dict(color="#003087", width=1)),
                 name=f"Cluster {cluster_id + 1}",
                 hovertext=[
                     f"{row.site_name}<br>Devices: {row.device_count}<br>Risk: {row.avg_risk:.0f}<br>Cost: ${row.total_cost:,.0f}"
@@ -1094,6 +1151,8 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signa
                          color="lifecycle_status", color_discrete_map=LIFECYCLE_COLORS,
                          labels={"total_refresh_cost": "Total Cost ($)", "lifecycle_status": ""})
     fig_cost_lc.update_traces(
+        marker_line_color="#003087",
+        marker_line_width=1,
         hovertemplate="<b>%{x}</b><br>Total Cost: $%{y:,.0f}<extra></extra>"
     )
     fig_cost_lc.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350, showlegend=False)
@@ -1110,6 +1169,8 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signa
                              "device_type": "Device Type",
                          })
     fig_cost_dt.update_traces(
+        marker_line_color="#003087",
+        marker_line_width=1,
         hovertemplate="<b>%{x}</b><br>Avg Cost: $%{y:,.0f}<extra></extra>"
     )
     fig_cost_dt.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350, showlegend=False)
@@ -1124,10 +1185,12 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signa
     site_data = site_data[site_data["total_cost"] > 0]
     fig_scatter = px.scatter(site_data, x="avg_risk", y="total_cost",
                              size="count", color="state",
+                             color_discrete_sequence=BRAND_CHART_COLORS,
                              labels={"avg_risk": "Average Risk Score",
                                      "total_cost": "Total Refresh Cost ($)"},
                              opacity=0.6)
     fig_scatter.update_traces(
+        marker=dict(line=dict(color="#003087", width=1)),
         hovertemplate="<b>%{hovertext}</b><br>Avg Risk: %{x:.1f}<br>Refresh Cost: $%{y:,.0f}<br>Devices: %{marker.size:,}<extra></extra>",
         hovertext=site_data["site_code"],
     )
@@ -1139,6 +1202,7 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signa
         x=cost_aff["total_refresh_cost"],
         y=cost_aff["affiliate"],
         orientation="h",
+        marker=dict(color="#1479BD"),
         hovertemplate="<b>%{y}</b><br>Total Cost: $%{x:,.0f}<extra></extra>",
     ))
     fig_cost_aff.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350,
@@ -1149,8 +1213,11 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signa
     eol_cost = eol_cost.sort_values("eol_date")
     eol_cost["cumulative_cost"] = eol_cost["total_refresh_cost"].cumsum()
     fig_cum = px.area(eol_cost, x="eol_date", y="cumulative_cost",
+                      color_discrete_sequence=["#1479BD"],
                       labels={"eol_date": "End-of-Life Date", "cumulative_cost": "Cumulative Cost ($)"})
     fig_cum.update_traces(
+        line=dict(color="#1479BD"),
+        fillcolor="rgba(20, 121, 189, 0.28)",
         hovertemplate="EoL Date: %{x|%b %d, %Y}<br>Cumulative Cost: $%{y:,.0f}<extra></extra>"
     )
     today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
@@ -1339,7 +1406,7 @@ def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal, _exc
         x=top_sites["avg_risk"],
         y=top_sites["site_code"],
         orientation="h",
-        marker=dict(color=top_sites["avg_risk"], colorscale="YlOrRd",
+        marker=dict(color=top_sites["avg_risk"], colorscale=BRAND_CONTINUOUS_SCALE,
                     colorbar=dict(title="Risk")),
         customdata=top_sites[["site_name", "device_count", "past_eol", "total_cost", "affiliate"]].values,
         hovertemplate=(
@@ -1375,6 +1442,7 @@ def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal, _exc
                 orientation="h",
                 name=dtype,
                 marker_color=DEVICE_TYPE_COLORS[dtype],
+                marker_line=dict(color="#003087", width=1),
                 customdata=subset[["count", "avg_risk", "total_cost"]].values,
                 hovertemplate=(
                     "<b>%{y}</b><br>"
