@@ -223,6 +223,8 @@ def make_sidebar():
                             href="#", id="nav-proximity", className="nav-link-custom"),
                 dbc.NavLink([html.I(className="fas fa-dollar-sign me-2"), "Cost & Risk Analysis"],
                             href="#", id="nav-cost", className="nav-link-custom"),
+                dbc.NavLink([html.I(className="fas fa-network-wired me-2"), "Port Utilization"],
+                            href="#", id="nav-capacity", className="nav-link-custom"),
                 dbc.NavLink([html.I(className="fas fa-flag me-2"), "Exception Management"],
                             href="#", id="nav-exceptions", className="nav-link-custom"),
                 dbc.NavLink([html.I(className="fas fa-sort-amount-up me-2"), "Refresh Planning"],
@@ -429,6 +431,37 @@ def cost_page():
     ])
 
 
+def capacity_page():
+    return html.Div([
+        html.H4("Port Utilization & Capacity", className="mb-3"),
+        html.P("Network port capacity utilization across switches, routers, and voice gateways.",
+               className="text-muted"),
+        html.Div(id="capacity-kpi-row"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Utilization Distribution", className="text-muted"),
+                dcc.Graph(id="capacity-histogram", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=6),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Utilization by Device Type", className="text-muted"),
+                dcc.Graph(id="capacity-by-type", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=6),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Top 20 Sites by Avg Port Utilization", className="text-muted"),
+                dcc.Graph(id="capacity-by-site", config={"displayModeBar": False}),
+            ]), className="shadow-sm"), md=12),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("High-Utilization Devices (>90%)", className="text-muted"),
+                html.Div(id="capacity-table"),
+            ]), className="shadow-sm"), md=12),
+        ]),
+    ])
+
+
 def exceptions_page():
     return html.Div([
         html.H4("Exception Management", className="mb-3"),
@@ -508,12 +541,21 @@ app.layout = html.Div([
     dcc.Store(id="current-page", data="overview"),
     dcc.Store(id="filtered-data-signal", data=0),
     dcc.Store(id="exceptions-signal", data=0),
+    dcc.Download(id="download-csv"),
     make_sidebar(),
     html.Div([
         html.Div([
-            html.H6("Southern Company — Network Services Lifecycle Analytics",
-                     className="text-muted mb-0"),
-            html.Small(id="filter-summary", className="text-muted"),
+            html.Div([
+                html.H6("Southern Company — Network Services Lifecycle Analytics",
+                         className="text-muted mb-0"),
+                html.Small(id="filter-summary", className="text-muted"),
+            ]),
+            dbc.Button(
+                [html.I(className="fas fa-download me-1"), "Export CSV"],
+                id="btn-export-csv",
+                color="outline-secondary",
+                size="sm",
+            ),
         ], className="d-flex justify-content-between align-items-center p-3 bg-white border-bottom"),
         html.Div(id="page-content", className="p-4"),
     ], style={"marginLeft": "280px"}),
@@ -524,13 +566,14 @@ app.layout = html.Div([
 # Callbacks: Navigation
 # ---------------------------------------------------------------------------
 NAV_IDS = ["nav-overview", "nav-map", "nav-timeline", "nav-proximity",
-           "nav-cost", "nav-exceptions", "nav-priorities"]
+           "nav-cost", "nav-capacity", "nav-exceptions", "nav-priorities"]
 PAGE_MAP = {
     "nav-overview": "overview",
     "nav-map": "map",
     "nav-timeline": "timeline",
     "nav-proximity": "proximity",
     "nav-cost": "cost",
+    "nav-capacity": "capacity",
     "nav-exceptions": "exceptions",
     "nav-priorities": "priorities",
 }
@@ -568,6 +611,7 @@ def render_page(page):
         "timeline": timeline_page,
         "proximity": proximity_page,
         "cost": cost_page,
+        "capacity": capacity_page,
         "exceptions": exceptions_page,
         "priorities": priorities_page,
     }
@@ -610,6 +654,47 @@ def update_filter_summary(states, affiliates, dtypes, lifecycle, _exc_signal):
     if affiliates:
         parts.append(f"{len(affiliates)} affiliate(s)")
     return " | ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: CSV Export
+# ---------------------------------------------------------------------------
+EXPORT_COLUMNS = [
+    "hostname", "serial_number", "ip_address", "model", "device_type",
+    "state", "site_code", "site_name", "affiliate", "county",
+    "lifecycle_status", "eos_date", "eol_date", "risk_score", "risk_tier",
+    "in_scope", "replacement_device",
+    "total_refresh_cost", "device_cost", "labor_cost", "material_cost",
+    "total_ports", "ports_in_use", "free_ports",
+    "de_hours", "se_hours", "fot_hours",
+    "exception_flagged", "source",
+]
+
+
+@app.callback(
+    Output("download-csv", "data"),
+    Input("btn-export-csv", "n_clicks"),
+    [State("filter-state", "value"),
+     State("filter-affiliate", "value"),
+     State("filter-device-type", "value"),
+     State("filter-lifecycle", "value")],
+    prevent_initial_call=True,
+)
+def export_csv(n, states, affiliates, dtypes, lifecycle):
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    df = df[df["exception_flagged"] != True]
+
+    # Select only columns that exist (handles edge cases)
+    cols = [c for c in EXPORT_COLUMNS if c in df.columns]
+    export = df[cols].copy()
+
+    # Format dates as strings for clean CSV output
+    for col in ["eos_date", "eol_date"]:
+        if col in export.columns:
+            export[col] = export[col].dt.strftime("%Y-%m-%d")
+
+    timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+    return dcc.send_data_frame(export.to_csv, f"soco_lifecycle_export_{timestamp}.csv", index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1259,6 +1344,202 @@ def update_cost(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signa
     fig_cum.update_layout(margin=dict(t=44, b=10, l=16, r=16), height=350)
 
     return fig_cost_lc, fig_cost_dt, fig_scatter, fig_cost_aff, fig_cum
+
+
+# ---------------------------------------------------------------------------
+# Callbacks: Port Utilization & Capacity
+# ---------------------------------------------------------------------------
+@app.callback(
+    [Output("capacity-kpi-row", "children"),
+     Output("capacity-histogram", "figure"),
+     Output("capacity-by-type", "figure"),
+     Output("capacity-by-site", "figure"),
+     Output("capacity-table", "children")],
+    [Input("current-page", "data"),
+     Input("filter-state", "value"),
+     Input("filter-affiliate", "value"),
+     Input("filter-device-type", "value"),
+     Input("filter-lifecycle", "value"),
+     Input("filtered-data-signal", "data"),
+     Input("exceptions-signal", "data")],
+)
+def update_capacity(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal):
+    if page != "capacity":
+        return [no_update] * 5
+
+    df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
+    df = df[df["exception_flagged"] != True]
+
+    # Only devices with port data (from NA source — switches, routers, voice gateways)
+    port_df = df[df["total_ports"].notna() & (df["total_ports"] > 0)].copy()
+    port_df["utilization_pct"] = port_df["ports_in_use"] / port_df["total_ports"] * 100
+
+    total_ports = port_df["total_ports"].sum()
+    in_use = port_df["ports_in_use"].sum()
+    available = port_df["free_ports"].sum()
+    avg_util = port_df["utilization_pct"].mean() if len(port_df) > 0 else 0
+    over_90 = (port_df["utilization_pct"] >= 90).sum()
+
+    # ---- KPI row ----
+    kpi_row = dbc.Row([
+        dbc.Col(make_kpi_card("Total Ports", f"{total_ports:,.0f}", "sitemap", "primary"), md=2),
+        dbc.Col(make_kpi_card("Ports In Use", f"{in_use:,.0f}", "plug", "warning"), md=2),
+        dbc.Col(make_kpi_card("Ports Available", f"{available:,.0f}", "check-circle", "success"), md=2),
+        dbc.Col(make_kpi_card("Avg Utilization", f"{avg_util:.1f}%", "tachometer-alt", "info"), md=2),
+        dbc.Col(make_kpi_card(">90% Utilized", f"{over_90:,}", "exclamation-triangle", "danger"), md=2),
+        dbc.Col(make_kpi_card("Devices w/ Data", f"{len(port_df):,}", "server", "secondary"), md=2),
+    ], className="mb-4")
+
+    # ---- Chart 1: Utilization Distribution Histogram ----
+    bins = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100.01]
+    labels = ["0-10%", "10-20%", "20-30%", "30-40%", "40-50%",
+              "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"]
+    port_df["util_band"] = pd.cut(port_df["utilization_pct"], bins=bins, labels=labels, right=False)
+    band_counts = port_df["util_band"].value_counts().reindex(labels, fill_value=0)
+
+    # Color each bar by its utilization level (green→red)
+    band_colors = [
+        "#9CC987", "#9CC987",  # 0-20% green
+        "#B2D235", "#B2D235",  # 20-40% lime
+        "#00BDF2", "#00BDF2",  # 40-60% blue
+        "#007DBA", "#007DBA",  # 60-80% dark blue
+        "#ED1D24", "#ED1D24",  # 80-100% red
+    ]
+    fig_hist = go.Figure(go.Bar(
+        x=band_counts.index.astype(str),
+        y=band_counts.values,
+        marker=dict(color=band_colors, line=dict(color="#003087", width=1)),
+        hovertemplate="<b>%{x}</b><br>Devices: %{y:,}<extra></extra>",
+    ))
+    fig_hist.update_layout(
+        margin=dict(t=10, b=10, l=10, r=10), height=350,
+        xaxis_title="Utilization Band", yaxis_title="Device Count",
+    )
+
+    # ---- Chart 2: Utilization by Device Type ----
+    type_util = port_df.groupby("device_type").agg(
+        avg_util=("utilization_pct", "mean"),
+        device_count=("device_id", "count"),
+        total_ports=("total_ports", "sum"),
+        in_use=("ports_in_use", "sum"),
+    ).reset_index()
+
+    fig_type = go.Figure()
+    for _, row in type_util.iterrows():
+        dt = row["device_type"]
+        fig_type.add_trace(go.Bar(
+            x=[dt],
+            y=[row["avg_util"]],
+            name=dt,
+            marker=dict(
+                color=DEVICE_TYPE_COLORS.get(dt, "#6c757d"),
+                line=dict(color="#003087", width=1),
+            ),
+            customdata=[[int(row["device_count"]), int(row["total_ports"]), int(row["in_use"])]],
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Avg Utilization: %{y:.1f}%<br>"
+                "Devices: %{customdata[0]:,}<br>"
+                "Total Ports: %{customdata[1]:,}<br>"
+                "In Use: %{customdata[2]:,}"
+                "<extra></extra>"
+            ),
+        ))
+    fig_type.update_layout(
+        margin=dict(t=10, b=10, l=10, r=10), height=350,
+        yaxis_title="Avg Utilization %", showlegend=False,
+    )
+
+    # ---- Chart 3: Top 20 Sites by Avg Utilization ----
+    site_util = port_df.groupby("site_code").agg(
+        avg_util=("utilization_pct", "mean"),
+        device_count=("device_id", "count"),
+        total_ports=("total_ports", "sum"),
+        free_ports=("free_ports", "sum"),
+    ).reset_index()
+    # Only sites with at least 3 devices so the avg is meaningful
+    site_util = site_util[site_util["device_count"] >= 3]
+    top_sites = site_util.sort_values("avg_util", ascending=True).tail(20)
+
+    fig_site = go.Figure(go.Bar(
+        x=top_sites["avg_util"],
+        y=top_sites["site_code"],
+        orientation="h",
+        marker=dict(
+            color=top_sites["avg_util"],
+            colorscale=BRAND_CONTINUOUS_SCALE,
+            colorbar=dict(title="Util %"),
+            line=dict(color="#003087", width=1),
+        ),
+        customdata=top_sites[["device_count", "total_ports", "free_ports"]].values,
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Avg Utilization: %{x:.1f}%<br>"
+            "Devices: %{customdata[0]:,}<br>"
+            "Total Ports: %{customdata[1]:,}<br>"
+            "Free Ports: %{customdata[2]:,}"
+            "<extra></extra>"
+        ),
+    ))
+    fig_site.update_layout(
+        margin=dict(t=10, b=10, l=10, r=10), height=500,
+        xaxis_title="Avg Utilization %", yaxis_title="Site",
+    )
+
+    # ---- Table: High-Utilization Devices (>90%) ----
+    high_util = port_df[port_df["utilization_pct"] >= 90].sort_values(
+        "utilization_pct", ascending=False
+    ).copy()
+    high_util["utilization_pct"] = high_util["utilization_pct"].round(1)
+    high_util["total_ports"] = high_util["total_ports"].astype(int)
+    high_util["ports_in_use"] = high_util["ports_in_use"].astype(int)
+    high_util["free_ports"] = high_util["free_ports"].astype(int)
+
+    table_data = high_util[[
+        "hostname", "model", "device_type", "site_code", "state",
+        "total_ports", "ports_in_use", "free_ports", "utilization_pct",
+        "lifecycle_status", "risk_score",
+    ]].head(200)
+
+    cap_table = dash_table.DataTable(
+        data=table_data.to_dict("records"),
+        columns=[
+            {"name": "Hostname", "id": "hostname"},
+            {"name": "Model", "id": "model"},
+            {"name": "Type", "id": "device_type"},
+            {"name": "Site", "id": "site_code"},
+            {"name": "State", "id": "state"},
+            {"name": "Total Ports", "id": "total_ports"},
+            {"name": "In Use", "id": "ports_in_use"},
+            {"name": "Free", "id": "free_ports"},
+            {"name": "Util %", "id": "utilization_pct"},
+            {"name": "Lifecycle", "id": "lifecycle_status"},
+            {"name": "Risk", "id": "risk_score"},
+        ],
+        page_size=15,
+        sort_action="native",
+        filter_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={"textAlign": "left", "padding": "8px", "fontSize": "13px"},
+        style_header={"fontWeight": "bold", "backgroundColor": "#f8f9fa"},
+        style_data_conditional=[
+            {"if": {"filter_query": "{utilization_pct} >= 95"}, "backgroundColor": "#f8d7da"},
+            {"if": {"filter_query": "{utilization_pct} >= 90 && {utilization_pct} < 95"},
+             "backgroundColor": "#fff3cd"},
+        ],
+    )
+
+    table_content = html.Div([
+        html.P(
+            f"Showing {len(high_util):,} devices above 90% port utilization. "
+            f"Port data available for {len(port_df):,} devices from Network Automation "
+            f"source (Switches, Routers, Voice Gateways).",
+            className="text-muted small mb-2",
+        ),
+        cap_table,
+    ])
+
+    return kpi_row, fig_hist, fig_type, fig_site, table_content
 
 
 # ---------------------------------------------------------------------------
