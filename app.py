@@ -225,7 +225,7 @@ def make_sidebar():
                             href="#", id="nav-cost", className="nav-link-custom"),
                 dbc.NavLink([html.I(className="fas fa-flag me-2"), "Exception Management"],
                             href="#", id="nav-exceptions", className="nav-link-custom"),
-                dbc.NavLink([html.I(className="fas fa-sort-amount-up me-2"), "Refresh Priorities"],
+                dbc.NavLink([html.I(className="fas fa-sort-amount-up me-2"), "Refresh Planning"],
                             href="#", id="nav-priorities", className="nav-link-custom"),
             ], vertical=True, pills=True),
         ], className="p-3"),
@@ -456,7 +456,7 @@ def exceptions_page():
 
 def priorities_page():
     return html.Div([
-        html.H4("Refresh Prioritization Recommendations", className="mb-3"),
+        html.H4("Refresh Planning & Prioritization", className="mb-3"),
         html.P("Sites and models prioritized by risk exposure and cost-efficiency.",
                className="text-muted"),
         dbc.Row([
@@ -473,6 +473,29 @@ def priorities_page():
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.H6("Recommended Refresh Schedule", className="text-muted"),
                 html.Div(id="refresh-schedule-table"),
+            ]), className="shadow-sm"), md=12),
+        ], className="mb-4"),
+
+        # ---- Staffing & Resource Planning Section ----
+        html.Hr(className="my-4"),
+        html.H4("Staffing & Resource Planning", className="mb-1"),
+        html.P("Engineering hours required for each refresh phase, based on ModelData staffing estimates.",
+               className="text-muted mb-3"),
+        html.Div(id="staffing-kpis", className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Engineering Hours by Refresh Phase", className="text-muted"),
+                dcc.Graph(id="staffing-by-phase"),
+            ]), className="shadow-sm"), md=6),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("Top 15 Sites by Engineering Hours Required", className="text-muted"),
+                dcc.Graph(id="staffing-by-site"),
+            ]), className="shadow-sm"), md=6),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.H6("FTE Projection by Refresh Phase", className="text-muted"),
+                html.Div(id="staffing-fte-table"),
             ]), className="shadow-sm"), md=12),
         ]),
     ])
@@ -1378,7 +1401,11 @@ def update_exception_count(page, clicks):
 @app.callback(
     [Output("priority-sites", "figure"),
      Output("priority-models", "figure"),
-     Output("refresh-schedule-table", "children")],
+     Output("refresh-schedule-table", "children"),
+     Output("staffing-kpis", "children"),
+     Output("staffing-by-phase", "figure"),
+     Output("staffing-by-site", "figure"),
+     Output("staffing-fte-table", "children")],
     [Input("current-page", "data"),
      Input("filter-state", "value"),
      Input("filter-affiliate", "value"),
@@ -1389,7 +1416,7 @@ def update_exception_count(page, clicks):
 )
 def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal, _exc_signal):
     if page != "priorities":
-        return [no_update] * 3
+        return [no_update] * 7
 
     df = apply_filters(DF, states, affiliates, dtypes, lifecycle)
     df = df[df["exception_flagged"] != True]
@@ -1462,53 +1489,43 @@ def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal, _exc
     today = pd.Timestamp.now()
     schedule_data = []
 
-    # Phase 1: Critical - Past EoL
-    p1 = df[df["lifecycle_status"] == "Past EoL"]
-    schedule_data.append({
-        "Phase": "1 — Immediate",
-        "Criteria": "Past End-of-Life",
-        "Devices": len(p1),
-        "Sites": p1["site_code"].nunique(),
-        "Est. Cost": f"${p1['total_refresh_cost'].sum():,.0f}",
-        "Timeline": "0-6 months",
-        "Risk": "Critical — No vendor support, security vulnerabilities",
-    })
+    # Build phase filters for reuse in staffing section
+    phase_filters = {
+        "1 — Immediate": df["lifecycle_status"] == "Past EoL",
+        "2 — Near-Term": df["lifecycle_status"] == "Past EoS",
+        "3 — Planning": df["lifecycle_status"] == "EoS within 1yr",
+        "4 — Strategic": (df["in_scope"] == "Yes") & (df["lifecycle_status"] == "Current"),
+    }
+    phase_timelines = {
+        "1 — Immediate": "0-6 months",
+        "2 — Near-Term": "6-18 months",
+        "3 — Planning": "12-24 months",
+        "4 — Strategic": "18-36 months",
+    }
+    phase_risks = {
+        "1 — Immediate": "Critical — No vendor support, security vulnerabilities",
+        "2 — Near-Term": "High — Limited procurement, approaching EoL",
+        "3 — Planning": "Medium — Plan procurement before EoS",
+        "4 — Strategic": "Low — Proactive lifecycle management",
+    }
+    phase_criteria = {
+        "1 — Immediate": "Past End-of-Life",
+        "2 — Near-Term": "Past End-of-Sale",
+        "3 — Planning": "EoS within 1 year",
+        "4 — Strategic": "In-Scope, still Current",
+    }
 
-    # Phase 2: High - Past EoS
-    p2 = df[df["lifecycle_status"] == "Past EoS"]
-    schedule_data.append({
-        "Phase": "2 — Near-Term",
-        "Criteria": "Past End-of-Sale",
-        "Devices": len(p2),
-        "Sites": p2["site_code"].nunique(),
-        "Est. Cost": f"${p2['total_refresh_cost'].sum():,.0f}",
-        "Timeline": "6-18 months",
-        "Risk": "High — Limited procurement, approaching EoL",
-    })
-
-    # Phase 3: EoS within 1yr
-    p3 = df[df["lifecycle_status"] == "EoS within 1yr"]
-    schedule_data.append({
-        "Phase": "3 — Planning",
-        "Criteria": "EoS within 1 year",
-        "Devices": len(p3),
-        "Sites": p3["site_code"].nunique(),
-        "Est. Cost": f"${p3['total_refresh_cost'].sum():,.0f}",
-        "Timeline": "12-24 months",
-        "Risk": "Medium — Plan procurement before EoS",
-    })
-
-    # Phase 4: In scope
-    p4 = df[(df["in_scope"] == "Yes") & (df["lifecycle_status"] == "Current")]
-    schedule_data.append({
-        "Phase": "4 — Strategic",
-        "Criteria": "In-Scope, still Current",
-        "Devices": len(p4),
-        "Sites": p4["site_code"].nunique(),
-        "Est. Cost": f"${p4['total_refresh_cost'].sum():,.0f}",
-        "Timeline": "18-36 months",
-        "Risk": "Low — Proactive lifecycle management",
-    })
+    for phase, mask in phase_filters.items():
+        p = df[mask]
+        schedule_data.append({
+            "Phase": phase,
+            "Criteria": phase_criteria[phase],
+            "Devices": len(p),
+            "Sites": p["site_code"].nunique(),
+            "Est. Cost": f"${p['total_refresh_cost'].sum():,.0f}",
+            "Timeline": phase_timelines[phase],
+            "Risk": phase_risks[phase],
+        })
 
     table = dash_table.DataTable(
         data=schedule_data,
@@ -1523,7 +1540,167 @@ def update_priorities(page, states, affiliates, dtypes, lifecycle, _signal, _exc
         ],
     )
 
-    return fig_sites, fig_models, table
+    # ==================================================================
+    # Staffing & Resource Planning
+    # ==================================================================
+    HOURS_PER_FTE_YEAR = 1_800  # standard billable hours per FTE per year
+
+    # Filter to devices that have staffing data
+    staffed = df[df["de_hours"].notna()].copy()
+    total_de = staffed["de_hours"].sum()
+    total_se = staffed["se_hours"].sum()
+    total_fot = staffed["fot_hours"].sum()
+    total_hours = total_de + total_se + total_fot
+    total_ftes = total_hours / HOURS_PER_FTE_YEAR
+
+    # Staffing KPI row
+    staffing_kpis = dbc.Row([
+        dbc.Col(make_kpi_card(
+            "Devices with Staffing Data",
+            f"{len(staffed):,} of {len(df):,}",
+            "users-cog", "primary",
+        ), md=3),
+        dbc.Col(make_kpi_card(
+            "Total Engineering Hours",
+            f"{total_hours:,.0f}",
+            "clock", "info",
+        ), md=3),
+        dbc.Col(make_kpi_card(
+            "Estimated FTEs Required",
+            f"{total_ftes:,.1f}",
+            "hard-hat", "warning",
+        ), md=3),
+        dbc.Col(make_kpi_card(
+            "Avg Hours per Device",
+            f"{(total_hours / max(len(staffed), 1)):.1f}",
+            "tachometer-alt", "success",
+        ), md=3),
+    ])
+
+    # ---- Chart 1: Engineering Hours by Refresh Phase (grouped bar) ----
+    phase_hours = []
+    phase_colors = {
+        "1 — Immediate": "#dc3545",
+        "2 — Near-Term": "#fd7e14",
+        "3 — Planning": "#0dcaf0",
+        "4 — Strategic": "#28a745",
+    }
+    for phase, mask in phase_filters.items():
+        p = staffed[mask]
+        phase_hours.append({
+            "Phase": phase,
+            "Design Engineer": p["de_hours"].sum(),
+            "Systems Engineer": p["se_hours"].sum(),
+            "Field Ops Tech": p["fot_hours"].sum(),
+        })
+    phase_hours_df = pd.DataFrame(phase_hours)
+
+    role_colors = {
+        "Design Engineer": "#0d6efd",
+        "Systems Engineer": "#6610f2",
+        "Field Ops Tech": "#20c997",
+    }
+    fig_phase = go.Figure()
+    for role, color in role_colors.items():
+        fig_phase.add_trace(go.Bar(
+            x=phase_hours_df["Phase"],
+            y=phase_hours_df[role],
+            name=role,
+            marker_color=color,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                + role + ": %{y:,.0f} hrs"
+                "<extra></extra>"
+            ),
+        ))
+    fig_phase.update_layout(
+        barmode="group",
+        margin=dict(t=10, b=10, l=10, r=10),
+        height=400,
+        yaxis_title="Hours",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+    )
+
+    # ---- Chart 2: Top 15 Sites by Total Engineering Hours ----
+    site_hours = staffed.groupby("site_code").agg(
+        de=("de_hours", "sum"),
+        se=("se_hours", "sum"),
+        fot=("fot_hours", "sum"),
+        device_count=("device_id", "count"),
+    ).reset_index()
+    site_hours["total"] = site_hours["de"] + site_hours["se"] + site_hours["fot"]
+    top_hour_sites = site_hours.sort_values("total", ascending=True).tail(15)
+
+    fig_site_hours = go.Figure()
+    for role, col, color in [
+        ("Design Engineer", "de", role_colors["Design Engineer"]),
+        ("Systems Engineer", "se", role_colors["Systems Engineer"]),
+        ("Field Ops Tech", "fot", role_colors["Field Ops Tech"]),
+    ]:
+        fig_site_hours.add_trace(go.Bar(
+            x=top_hour_sites[col],
+            y=top_hour_sites["site_code"],
+            name=role,
+            orientation="h",
+            marker_color=color,
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                + role + ": %{x:,.0f} hrs"
+                "<extra></extra>"
+            ),
+        ))
+    fig_site_hours.update_layout(
+        barmode="stack",
+        margin=dict(t=10, b=10, l=10, r=10),
+        height=450,
+        xaxis_title="Total Hours",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="center", x=0.5),
+    )
+
+    # ---- Table: FTE Projection by Phase ----
+    fte_data = []
+    for phase, mask in phase_filters.items():
+        p = staffed[mask]
+        de_h = p["de_hours"].sum()
+        se_h = p["se_hours"].sum()
+        fot_h = p["fot_hours"].sum()
+        tot_h = de_h + se_h + fot_h
+        fte_data.append({
+            "Phase": phase,
+            "Timeline": phase_timelines[phase],
+            "Devices": len(p),
+            "DE Hours": f"{de_h:,.0f}",
+            "SE Hours": f"{se_h:,.0f}",
+            "FOT Hours": f"{fot_h:,.0f}",
+            "Total Hours": f"{tot_h:,.0f}",
+            "Est. FTEs": f"{tot_h / HOURS_PER_FTE_YEAR:.1f}",
+        })
+
+    fte_table = dash_table.DataTable(
+        data=fte_data,
+        columns=[{"name": k, "id": k} for k in fte_data[0].keys()],
+        style_cell={"textAlign": "left", "padding": "10px", "fontSize": "13px"},
+        style_header={"fontWeight": "bold", "backgroundColor": "#f8f9fa"},
+        style_data_conditional=[
+            {"if": {"filter_query": '{Phase} = "1 — Immediate"'}, "backgroundColor": "#f8d7da"},
+            {"if": {"filter_query": '{Phase} = "2 — Near-Term"'}, "backgroundColor": "#fff3cd"},
+            {"if": {"filter_query": '{Phase} = "3 — Planning"'}, "backgroundColor": "#d1ecf1"},
+            {"if": {"filter_query": '{Phase} = "4 — Strategic"'}, "backgroundColor": "#d4edda"},
+        ],
+    )
+
+    staffing_fte_content = html.Div([
+        html.P(
+            f"Based on {len(staffed):,} devices with ModelData staffing estimates "
+            f"({len(staffed) / max(len(df), 1) * 100:.0f}% of filtered devices). "
+            f"FTE assumes {HOURS_PER_FTE_YEAR:,} billable hours per year.",
+            className="text-muted small mb-2",
+        ),
+        fte_table,
+    ])
+
+    return (fig_sites, fig_models, table,
+            staffing_kpis, fig_phase, fig_site_hours, staffing_fte_content)
 
 
 # ---------------------------------------------------------------------------
