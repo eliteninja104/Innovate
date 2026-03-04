@@ -1,12 +1,45 @@
+# Python
 __pycache__/
 *.pyc
-__pycache__/
-*.pyc
+*.pyo
+
+# Environment / secrets
+.env
+.env.*
+*.key
+*.pem
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Claude local settings
 .claude/settings.local.json
+
+# Windows null device artifact
 nul
-.claude/settings.local.json
-.claude/settings.local.json
-.claude/settings.local.json
-.claude/settings.local.json
-pipeline_output/
+
+# R history
 .Rhistory
+
+# Binary deliverables / archives
+*.zip
+*.pptx
+
+# Local output / tools
+codex-local
+tools/
+assets/
+
+# Submission deliverable directories
+SUBMISSION_DELIVERABLES/
+PUBLIC_SUBMISSION_DELIVERABLES/
+
+# Generated HTML
+risk_score_table.html
+
+# pipeline_output/ - un-ignored for deployment (processed data needed on Render)

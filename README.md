@@ -1,262 +1,131 @@
-# Southern Company Network Equipment Lifecycle Dashboard
+# Southern Company Network Lifecycle Dashboard
 
-An automated data analytics pipeline and interactive dashboard for Southern Company's Network Services division. Surfaces equipment aging, risk exposure, cost optimization opportunities, and refresh planning recommendations across thousands of Cisco networking devices.
+**Live Demo:** [https://innovate-bp17.onrender.com](https://innovate-bp17.onrender.com/)
+
+This project turns Southern Company's raw network equipment workbook into a repeatable lifecycle planning tool. It combines an ETL pipeline with an interactive Dash application so leadership and engineering teams can see where lifecycle risk sits, what it may cost to address, and which site packages should be refreshed first.
 
 ## Quick Start
 
-### Prerequisites
+Prerequisites:
+
 - Python 3.10+
-- The dataset file `UAInnovateDataset-SoCo.xlsx` in the project root
+- `UAInnovateDataset-SoCo.xlsx` in the project root
 
-### Install & Run
+Run:
 
-**Windows:**
-```
-run.bat
-```
-
-**Mac/Linux:**
-```bash
-chmod +x run.sh
-./run.sh
-```
-
-**Manual:**
 ```bash
 pip install -r requirements.txt
-python etl_pipeline.py
 python app.py
 ```
 
-Open **http://localhost:8050** in your browser.
+Open `http://localhost:8050` in a browser.
 
----
+To rebuild the processed data from the workbook:
 
-## Architecture Overview
-
-```
-UAInnovateDataset-SoCo.xlsx
-        |
-        v
-  ┌─────────────────────────────────────┐
-  │         etl_pipeline.py             │
-  │                                     │
-  │  1. Load all worksheets             │
-  │  2. Filter active/reachable only    │
-  │  3. Normalize device types          │
-  │  4. Deduplicate (CatCtr/Prime win)  │
-  │  5. Expand serial stacks            │
-  │  6. Parse hostname -> state/site    │
-  │  7. Join SOLID location data        │
-  │  8. Join ModelData (EoS/EoL/cost)   │
-  │  9. Compute lifecycle status & risk │
-  │ 10. Apply user exceptions           │
-  │ 11. Output unified CSV              │
-  └─────────────────────────────────────┘
-        |
-        v
-  pipeline_output/
-  ├── unified_devices.csv
-  ├── pipeline_metadata.json
-  └── exceptions.json
-        |
-        v
-  ┌─────────────────────────────────────┐
-  │            app.py                   │
-  │     (Dash Interactive Dashboard)    │
-  │                                     │
-  │  - Executive Summary                │
-  │  - Geographic Risk Map              │
-  │  - EoS/EoL Timeline                │
-  │  - Proximity Analysis               │
-  │  - Cost & Risk Analysis             │
-  │  - Exception Management             │
-  │  - Refresh Priorities               │
-  └─────────────────────────────────────┘
+```bash
+python etl_pipeline.py
 ```
 
----
+## Current Dashboard Structure
 
-## Data Model
+The app is organized around one primary narrative page plus five deep dives.
 
-### Source Sheets
+### 1. Network Risk Assessment
 
-| Sheet | Description | Records |
-|-------|-------------|---------|
-| **SOLID** | Site directory (address, state, zip) | ~3,630 |
-| **SOLID-Loc** | Site geocoding (lat/lon, county, affiliate) | ~3,631 |
-| **NA** | Network Automation — switches, routers, VGs | ~9,395 |
-| **PrimeAP** | Cisco Prime — access points | ~565 |
-| **PrimeWLC** | Cisco Prime — wireless LAN controllers | ~7 |
-| **CatCtr** | Catalyst Center — APs, WLCs, switches, routers | ~11,679 |
-| **Decom** | Sites scheduled for decommission | 6 |
-| **ModelData** | Model lifecycle dates, costs, replacement info | 167 |
-| **Pricing** | Detailed SKU-level pricing | 133 |
-| **Glossary** | Column and term definitions | 98 |
+This is the executive landing page. It restores the full project story described in the recovered notes:
 
-### Unified Output Schema
+- risk-focused KPI row
+- expandable cost stack
+- support coverage and security interpretation
+- formal data-confidence section
+- fleet composition, lifecycle, and risk visuals
+- geographic risk map and state/county views
+- recommended refresh schedule
+- AI refresh plan optimizer
+- executive decision brief and final recommendation
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `device_id` | string | Unique hash ID |
-| `hostname` | string | Device hostname (normalized) |
-| `ip_address` | string | Management IP |
-| `device_type` | string | Switch, Router, Access Point, Voice Gateway, or WLC |
-| `model` | string | Cisco model number |
-| `serial_number` | string | Individual serial (stacks expanded) |
-| `state_code` | string | 2-char state from hostname |
-| `site_code` | string | 3-char site from hostname |
-| `state` | string | Full state abbreviation |
-| `affiliate` | string | Owning affiliate (GPC, APC, MPC, etc.) |
-| `latitude/longitude` | float | Geocoordinates |
-| `county` | string | Physical county |
-| `eos_date` | date | End-of-Sale date |
-| `eol_date` | date | End-of-Life date |
-| `lifecycle_status` | string | Past EoL, Past EoS, EoS within 1yr, Current, Unknown |
-| `risk_score` | int | 0-100 composite risk score |
-| `risk_tier` | string | Critical, High, Medium, Low |
-| `total_refresh_cost` | float | Material + labor cost to refresh |
-| `exception_flagged` | bool | User-flagged exception |
-| `source` | string | Data source (NA, CatCtr, PrimeAP, PrimeWLC) |
+### 2. Deep-Dive Pages
 
----
+- `EoS / EoL Timeline`
+- `Proximity Analysis`
+- `Cost & Risk Analysis`
+- `Port Utilization`
+- `Exception Management`
 
-## Transformation Rules Applied
+The app also includes a floating `Fleet Assistant` chat widget that answers questions from aggregated dashboard statistics when `OPENAI_API_KEY` is configured.
 
-### 1. Active Devices Only
-- **NA**: `Device Status == "Active"`
-- **CatCtr**: `reachabilityStatus == "Reachable"`
-- **PrimeAP**: `upTime > 0`
-- **PrimeWLC**: `reachability == "REACHABLE"`
+## Core Business Rules
 
-### 2. Device Type Normalization
-NA types are mapped to canonical categories:
-- `L3Switch`, `Application Switch`, `Virtual Switch` → **Switch**
-- `Router` → **Router**
-- `Voice Gateway` → **Voice Gateway**
-- `Firewall`, `Virtual Firewall` → **excluded** (out of scope)
-- `Wireless Controller`, `WirelessLC` → removed from NA (CatCtr/Prime authoritative)
+- Only active or reachable devices are included.
+- `NA` is authoritative for switches, routers, and voice gateways.
+- `CatCtr` is authoritative for access points and WLCs, with `Prime` filling wireless gaps.
+- State and site are parsed from hostname prefixes.
+- Devices at decom sites are excluded.
+- `Unknown` lifecycle rows remain in inventory counts but are excluded from risk-focused views per Southern Company guidance.
 
-### 3. Source-of-Truth Hierarchy
-- **Switches, Routers, Voice Gateways**: NA is authoritative
-- **Access Points, WLCs**: CatCtr is primary; Prime fills gaps for devices not in CatCtr
-- Duplicates in NA for AP/WLC types are dropped
+## Current Snapshot
 
-### 4. Hostname Parsing
-- First 2 characters → state code
-- Characters 3-5 → site code
-- Domain suffixes (e.g., `.southernco.com`) stripped before parsing
+Based on the current processed output:
 
-### 5. Serial Number Expansion
-Comma-separated serial numbers (switch stacks, HA pairs) are expanded into individual device records.
+- `22,744` devices processed from the workbook
+- `22,743` devices visible in the dashboard after persisted exception handling
+- `7,409` lifecycle-known devices in the current risk-focused view
+- `15,334` `Unknown` lifecycle devices retained in inventory reporting
+- `99.92%` geocoded coverage
+- `$21.39M` hardware-only refresh cost in the risk-focused fleet
+- `$48.44M` modeled all-in refresh cost in the risk-focused fleet
+- `96.0%` replacement mapping coverage in the risk-focused fleet
+- `97.3%` staffing-hour coverage in the risk-focused fleet
 
-### 6. Decommission Filtering
-Devices at the 6 decom sites (GSE, GSI, MCM, PSW, RED, XAG) are excluded.
+Lifecycle counts in the current visible risk-focused view:
 
-### 7. Additional Rules from Glossary
-- AP hostnames starting with "AP" are excluded
-- 5508 WLCs are not flagged for lifecycle (no replacement mapped)
+- `Past EoL`: `1,146`
+- `Past EoS`: `6,263`
+- `EoS within 1yr`: `0`
+- `Current`: `0`
 
----
+## Default Optimizer Recommendation
 
-## Dashboard Views
+With the restored default optimizer settings:
 
-### 1. Executive Summary
-KPI cards showing total devices, past-EoL count, past-EoS count, critical risk count, estimated refresh cost, and active sites. Includes device type distribution, lifecycle status pie chart, risk distribution bar chart, and breakdowns by state and affiliate.
+- Budget cap: `12M`
+- FTE cap: `10`
+- Objective: `Balanced`
 
-### 2. Geographic Risk Map
-Interactive map using scatter markers sized by device count and colored by average risk score. Includes a US choropleth by state and a top-20 county risk ranking.
+Current first wave:
 
-### 3. EoS/EoL Timeline
-Stacked bar charts showing device counts by End-of-Sale and End-of-Life quarterly timeline, segmented by device type. A "Today" reference line highlights what's already past due. Includes a sortable/filterable table of overdue (past EoL) devices.
+- `8` sites
+- `2,162` devices
+- about `$8.75M` modeled refresh spend
+- about `$9.55M` planning budget including site mobilization reserve
+- `10.0` FTE
+- about `41.8%` modeled risk coverage
 
-### 4. Proximity Analysis
-DBSCAN-based spatial clustering of sites. Adjustable radius slider (1-25 miles) and minimum site count. Identifies clusters of nearby sites that could be refreshed together as coordinated projects. Shows cluster details with device counts, risk scores, and estimated costs.
+Current recommended sites:
 
-### 5. Cost & Risk Analysis
-- Total refresh cost breakdown by lifecycle status
-- Average cost per device by type
-- Risk score vs. refresh cost scatter plot (by site)
-- Cost distribution by affiliate
-- Cumulative investment timeline (cost ordered by EoL date)
+1. `VNP` - Vogtle Nuclear Plant
+2. `XGP` - GPC - Corp HQ
+3. `PLM` - APC-Miller Steam Plant
+4. `QPF` - Plant Franklin - Southern Power
+5. `WLV` - SCS Wilsonville
+6. `BFG` - Birmingham Fleet Garage
+7. `SIN` - Plant Sinclair Dam
+8. `SPO` - Sands Place OH
 
-### 6. Exception Management
-Search devices by hostname or serial number. Toggle exception flags with reasons. Exceptions are persisted to `pipeline_output/exceptions.json` and respected in all downstream reporting — flagged devices are excluded from all charts and calculations.
+## Files
 
-### 7. Refresh Priorities
-- Top 20 highest-risk sites ranked by average risk score
-- Priority models ranked by a composite score (risk x log of count)
-- Recommended 4-phase refresh schedule:
-  - Phase 1 (Immediate): Past EoL devices
-  - Phase 2 (Near-Term): Past EoS devices
-  - Phase 3 (Planning): EoS within 1 year
-  - Phase 4 (Strategic): In-scope but still current
+- `etl_pipeline.py`: workbook ingestion and transformation
+- `app.py`: Dash dashboard
+- `pipeline_output/unified_devices.csv`: processed dataset
+- `pipeline_output/pipeline_metadata.json`: run metadata
+- `pipeline_output/exceptions.json`: persisted business exceptions
 
----
+## Optional Chat Configuration
 
-## Automation
+To enable `Fleet Assistant`, set:
 
-### Data Re-ingestion
-To process a new data drop:
-
-1. Replace `UAInnovateDataset-SoCo.xlsx` with the updated file (same filename)
-2. Click "Refresh Data" in the dashboard sidebar, **or** re-run `python etl_pipeline.py`
-3. The pipeline re-executes end-to-end and the dashboard picks up the new data
-
-The pipeline can also be invoked programmatically:
-```python
-from etl_pipeline import run_pipeline
-df, sheets = run_pipeline("path/to/new/UAInnovateDataset-SoCo.xlsx")
+```bash
+OPENAI_API_KEY=your_key_here
 ```
 
-### Exception Persistence
-User-flagged exceptions survive pipeline re-runs. They are stored separately in `pipeline_output/exceptions.json` and applied during each pipeline execution.
-
----
-
-## Risk Scoring Methodology
-
-The composite risk score (0-100) considers:
-
-| Factor | Points |
-|--------|--------|
-| Past End-of-Life | 30 base + 5 per year past |
-| Past End-of-Sale | 15-20 |
-| EoS within 1 year | 10 |
-| Flagged as "In Scope" for lifecycle | 10 |
-| Has known replacement device | 5 |
-
-Risk tiers:
-- **Critical** (75-100): Immediate action needed
-- **High** (50-75): Near-term refresh priority
-- **Medium** (25-50): Plan and budget
-- **Low** (0-25): Monitor
-
----
-
-## Assumptions Beyond Specifications
-
-1. **Port utilization data** from NA is preserved but not available for CatCtr/Prime sources
-2. **"Unknown" lifecycle status** means no matching model in the ModelData sheet — these are assigned Low risk and zero refresh cost
-3. **Proximity clustering** uses DBSCAN with haversine metric for geodesic accuracy
-4. **Cost estimates** use material_cost + labor_cost from ModelData. Actual project costs may vary based on scope, scheduling, and volume discounts.
-5. **5508 WLCs** have no replacement mapped per the glossary note "5508's will not be lifecycled" — they are included in inventory but have $0 refresh cost
-
----
-
-## File Structure
-
-```
-Innovate/
-├── UAInnovateDataset-SoCo.xlsx   # Source data
-├── etl_pipeline.py               # ETL pipeline
-├── app.py                        # Dashboard application
-├── requirements.txt              # Python dependencies
-├── run.bat                       # Windows launcher
-├── run.sh                        # Unix launcher
-├── README.md                     # This file
-└── pipeline_output/
-    ├── unified_devices.csv       # Processed dataset
-    ├── pipeline_metadata.json    # Run metadata
-    └── exceptions.json           # User exception flags
-```
+If no API key is configured, the widget remains visible but returns an inline availability message instead of crashing.

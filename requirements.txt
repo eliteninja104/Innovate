@@ -6,3 +6,5 @@ dash>=2.14
 dash-bootstrap-components>=1.5
 scikit-learn>=1.3
 geopandas>=0.14
+openai>=1.0
+gunicorn>=21.0
